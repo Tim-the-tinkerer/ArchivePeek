@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Xcode / SwiftPM
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Built app bundle (produced by build-app.sh)
+ArchivePeek.app/
+
+# Local tool cache (vendor-tools downloads)
+.cache/
+
+# Logs / diagnostics
+*.log
+~/Library/Logs/ArchivePeek/
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+.cursor/
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
