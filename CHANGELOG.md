@@ -2,6 +2,11 @@
 
 All notable changes to ArchivePeek are documented in this file.
 
+## [1.0.27] — 2026-08-09
+
+### Fixed
+- **ZIP/7z blocked by DMG app-installer setting** — if “DMG app installer layout” was on as a default, Create Archive failed for ZIP, 7z, and other non-DMG formats (especially project folders that contain a nested `.app`). Installer layout is now applied only when the format is DMG; nested `.app` bundles inside a project folder are archived normally for ZIP/7z.
+
 ## [1.0.26] — 2026-08-09
 
 ### Added

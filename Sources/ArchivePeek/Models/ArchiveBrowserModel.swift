@@ -475,9 +475,14 @@ final class ArchiveBrowserModel: ObservableObject {
             return
         }
 
-        if compressDmgAppInstaller && !canCreateDmgAppInstaller {
-            errorMessage = "App installer layout requires at least one .app bundle."
+        // App installer layout is DMG-only. Ignore a stale true flag on ZIP/7z/etc.
+        // (Previously: defaultDmgAppInstaller + non-DMG format always failed Create Archive.)
+        if compressFormat.isDmg && compressDmgAppInstaller && !canCreateDmgAppInstaller {
+            errorMessage = "App installer layout requires at least one top-level .app bundle. Use DMG with a selected .app, or turn off App installer layout."
             return
+        }
+        if !compressFormat.isDmg {
+            compressDmgAppInstaller = false
         }
 
         let panel = NSSavePanel()
@@ -927,7 +932,8 @@ final class ArchiveBrowserModel: ObservableObject {
                 compressionLevel: compressionLevel,
                 password: compressPassword.isEmpty ? nil : compressPassword,
                 solidArchive: compressSolidArchive,
-                dmgAppInstallerLayout: compressDmgAppInstaller,
+                // Never pass installer layout unless format is DMG (flag can linger from Settings).
+                dmgAppInstallerLayout: compressFormat.isDmg && compressDmgAppInstaller,
                 // When enabled, verify the staged sibling **before** replacing any existing file.
                 verifyBeforeCommit: verifyAfterCompress,
                 accessTokens: accessTokens,

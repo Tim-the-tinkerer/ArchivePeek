@@ -68,7 +68,9 @@ enum AppSettings {
         browser.compressionLevel = defaultCompressionLevel
         browser.verifyAfterCompress = defaultVerifyAfterCompress
         browser.compressSolidArchive = defaultSolidArchive
-        browser.compressDmgAppInstaller = defaultDmgAppInstaller
+        // App-installer layout is DMG-only. Never leave the flag on for ZIP/7z/etc.
+        // (That used to block Create Archive with a misleading installer/.app error.)
+        browser.compressDmgAppInstaller = defaultDmgAppInstaller && defaultCompressFormat.isDmg
         browser.compressSaveAsComicBookZip = defaultComicBookZip && defaultCompressFormat.isZip
     }
 }
