@@ -2,13 +2,16 @@
 
 A native macOS app for browsing archive contents without extracting everything first, and for creating new archives quickly.
 
-**Version 1.0.22** · macOS 13.0 or later
+**Version 1.0.26** · macOS 13.0 or later
+
+**Source & updates:** [github.com/Tim-the-tinkerer/ArchivePeek](https://github.com/Tim-the-tinkerer/ArchivePeek) — use **ArchivePeek → Check for Updates…** in the app.
 
 ## Features
 
 - **Browse** ZIP, 7z, RAR, TAR, GZ, BZ2, XZ, and many other formats
 - **Extract** selected files, individual items, or entire archives
 - **Compress** files and folders into ZIP, DMG, 7z, TAR, and more
+- **Comic book ZIP (CBZ)** — optional `.cbz` extension under the ZIP format for comic readers
 - **Verify integrity** of created or open archives
 - **Quick Look** files inside archives
 - **Drag and drop** to open, compress, and pull files out to Finder
@@ -17,7 +20,7 @@ A native macOS app for browsing archive contents without extracting everything f
 - **Solid 7z** option for stronger compression on large file sets
 - **Fast paths** using native macOS `zip`, `ditto`, and `bsdtar` where possible
 - **Clean archives** — excludes only macOS junk (`.DS_Store`, AppleDouble `._*`, `__MACOSX`); keeps `.gitignore`, `.git`, and other project files
-- **Settings** — default compression format, level, verify-after-create, and optional “make default app” for archives
+- **Settings** — default compression format, level, verify-after-create, comic book ZIP, and optional “make default app” for archives
 
 ## Getting Started
 
@@ -54,13 +57,14 @@ Open **ArchivePeek → Settings…** (⌘,) to set defaults applied whenever you
 - Default archive format and compression level
 - Verify before replacing an existing destination file (on/off)
 - Solid 7z archive (on/off)
+- Save ZIP as comic book (`.cbz`) (on/off, when default format is ZIP)
 - DMG app installer layout (on/off)
 
 Use **Set ArchivePeek as Default for Archives** to register ArchivePeek as the system default for ZIP, 7z, TAR, RAR, and similar archives. DMG and ISO are excluded (Disk Utility or Finder remain the usual handlers). macOS asks for a single confirmation.
 
 ## Compression notes
 
-- **ZIP** without a password uses the fast native compressor (`zip` or `ditto` for single folders).
+- **ZIP** without a password uses the fast native compressor (`zip` or `ditto` for single folders). Enable **Save as comic book ZIP** to write the same archive with a `.cbz` extension.
 - **DMG** uses macOS `hdiutil` for standard compressed disk images (optional AES-256 encryption). When archiving a `.app`, enable **App installer layout** to add an Applications folder shortcut.
 - **ZIP and 7z** prepare files in a temp folder first (with progress), then compress — this avoids macOS permission prompts and incomplete reads on external volumes or large developer trees.
 - **Coding projects stay complete** — `.git`, `.gitignore`, `.build`, `node_modules`, hidden config, and symlinks are included. Application and help bundles (`.app`, `.help`) are copied as whole packages.

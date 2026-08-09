@@ -296,24 +296,38 @@ enum CompressionSupport {
         return try zipContext(for: sources, fileManager: fileManager)
     }
 
-    static func normalizedArchiveURL(_ url: URL, format: CompressFormat) -> URL {
+    static func normalizedArchiveURL(
+        _ url: URL,
+        format: CompressFormat,
+        comicBookZip: Bool = false
+    ) -> URL {
         let standardized = url.standardizedFileURL
-        if hasExpectedExtension(standardized, format: format) {
+        if hasExpectedExtension(standardized, format: format, comicBookZip: comicBookZip) {
             return standardized
         }
 
+        let ext = format.outputExtension(comicBookZip: comicBookZip)
         if standardized.pathExtension.isEmpty {
-            return URL(fileURLWithPath: standardized.path + "." + format.fileExtension)
+            return URL(fileURLWithPath: standardized.path + "." + ext)
+        }
+
+        // Multi-part extensions (tar.gz) need path + suffix; single-part use appendingPathExtension.
+        if ext.contains(".") {
+            let name = standardized.deletingPathExtension().lastPathComponent
+            return standardized
+                .deletingLastPathComponent()
+                .appendingPathComponent("\(name).\(ext)")
         }
 
         return standardized
             .deletingPathExtension()
-            .appendingPathExtension(format.fileExtension)
+            .appendingPathExtension(ext)
     }
 
     static func existingArchiveOutput(
         intended: URL,
         format: CompressFormat,
+        comicBookZip: Bool = false,
         fileManager: FileManager = .default
     ) -> URL? {
         if fileManager.fileExists(atPath: intended.path) {
@@ -321,7 +335,8 @@ enum CompressionSupport {
         }
 
         if intended.pathExtension.isEmpty {
-            let autoAdded = URL(fileURLWithPath: intended.path + "." + format.fileExtension)
+            let ext = format.outputExtension(comicBookZip: comicBookZip)
+            let autoAdded = URL(fileURLWithPath: intended.path + "." + ext)
             if fileManager.fileExists(atPath: autoAdded.path) {
                 return autoAdded
             }
@@ -330,16 +345,24 @@ enum CompressionSupport {
         return nil
     }
 
-    static func hasExpectedExtension(_ url: URL, format: CompressFormat) -> Bool {
+    static func hasExpectedExtension(
+        _ url: URL,
+        format: CompressFormat,
+        comicBookZip: Bool = false
+    ) -> Bool {
         let name = url.lastPathComponent.lowercased()
-        let expected = format.fileExtension.lowercased()
+        let expected = format.outputExtension(comicBookZip: comicBookZip).lowercased()
         if expected.contains(".") {
             return name.hasSuffix(".\(expected)")
         }
         return url.pathExtension.lowercased() == expected
     }
 
-    static func proposedArchiveName(for sources: [URL], format: CompressFormat) -> String {
+    static func proposedArchiveName(
+        for sources: [URL],
+        format: CompressFormat,
+        comicBookZip: Bool = false
+    ) -> String {
         let baseName: String
         if sources.count == 1 {
             let source = sources[0]
@@ -356,7 +379,7 @@ enum CompressionSupport {
         } else {
             baseName = "Archive"
         }
-        return "\(baseName).\(format.fileExtension)"
+        return "\(baseName).\(format.outputExtension(comicBookZip: comicBookZip))"
     }
 
     static func uniqueArchiveURL(
@@ -391,10 +414,16 @@ enum CompressionSupport {
         archive: URL,
         sources: [URL],
         format: CompressFormat,
+        comicBookZip: Bool = false,
         fileManager: FileManager = .default
     ) -> CompressionDestination {
         _ = sources // retained for call-site symmetry / future nested-archive checks
-        return temporaryCompressionDestination(archive: archive, format: format, fileManager: fileManager)
+        return temporaryCompressionDestination(
+            archive: archive,
+            format: format,
+            comicBookZip: comicBookZip,
+            fileManager: fileManager
+        )
     }
 
     /// Build in a temp file first, then move into place with app security scope
@@ -402,26 +431,33 @@ enum CompressionSupport {
     static func temporaryCompressionDestination(
         archive: URL,
         format: CompressFormat,
+        comicBookZip: Bool = false,
         fileManager: FileManager = .default
     ) -> CompressionDestination {
         let finalURL = archive.standardizedFileURL
-        // Prefer the format’s full extension (e.g. tar.gz) over URL.pathExtension (gz only).
+        // Prefer the format’s full extension (e.g. tar.gz / cbz) over URL.pathExtension alone.
+        let formatExt = format.outputExtension(comicBookZip: comicBookZip)
         let ext: String
-        if hasExpectedExtension(finalURL, format: format) {
+        if hasExpectedExtension(finalURL, format: format, comicBookZip: comicBookZip) {
             let name = finalURL.lastPathComponent
-            let expected = format.fileExtension
-            if expected.contains("."), name.lowercased().hasSuffix("." + expected.lowercased()) {
-                ext = expected
+            if formatExt.contains("."), name.lowercased().hasSuffix("." + formatExt.lowercased()) {
+                ext = formatExt
             } else if !finalURL.pathExtension.isEmpty {
                 ext = finalURL.pathExtension
             } else {
-                ext = expected
+                ext = formatExt
             }
         } else if finalURL.pathExtension.isEmpty {
-            ext = format.fileExtension
+            ext = formatExt
         } else {
-            // User typed a name with a wrong/other extension; work file still uses format extension.
-            ext = format.fileExtension
+            // Prefer the destination’s extension when it’s a ZIP alias (e.g. .cbz) so the
+            // work/sibling file matches what we commit; otherwise fall back to format extension.
+            let destExt = finalURL.pathExtension.lowercased()
+            if format.isZip && ArchiveFormatCatalog.zipExtensions.contains(destExt) {
+                ext = destExt
+            } else {
+                ext = formatExt
+            }
         }
         let temp = fileManager.temporaryDirectory
             .appendingPathComponent("ArchivePeek-\(UUID().uuidString).\(ext)")

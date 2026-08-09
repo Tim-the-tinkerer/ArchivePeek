@@ -2,6 +2,27 @@
 
 All notable changes to ArchivePeek are documented in this file.
 
+## [1.0.26] — 2026-08-09
+
+### Added
+- **Check for Updates** — **ArchivePeek → Check for Updates…**, **Help → Check for Updates…**, Settings, and Help compare your version with the latest GitHub release and open [github.com/Tim-the-tinkerer/ArchivePeek](https://github.com/Tim-the-tinkerer/ArchivePeek) (or Releases) when appropriate.
+- **Help → ArchivePeek on GitHub** opens the project repository.
+
+## [1.0.25] — 2026-08-09
+
+### Fixed
+- **CBZ icons still wrong after 1.0.24** — Launch Services was still using a stale `/Applications/ArchivePeek.app` (1.0.22) that mapped `.cbz` to the generic archive type. `build-app.sh` now installs into `/Applications` and re-registers the app; ArchivePeek also re-registers its UTIs on launch. Correct presentation is the standard zipper document with a **CBZ** label (not ComicReader’s comic-book badge and not an unrelated coffee-cup graphic).
+
+## [1.0.24] — 2026-08-09
+
+### Fixed
+- **CBZ Finder type** — comic book ZIP uses a dedicated type (`com.archivepeek.cbz`) that conforms to `public.zip-archive`, instead of the generic archive type.
+
+## [1.0.23] — 2026-08-09
+
+### Added
+- **Comic book ZIP (CBZ)** — under the ZIP format, enable **Save as comic book ZIP** to create a standard ZIP archive with a `.cbz` extension for comic readers. Password, compression level, and verify options work the same as ZIP. Default is available in Settings when ZIP is the default format.
+
 ## [1.0.22] — 2026-08-08
 
 ### Fixed

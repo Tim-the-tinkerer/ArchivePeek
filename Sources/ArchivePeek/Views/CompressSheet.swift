@@ -67,6 +67,17 @@ struct CompressSheet: View {
                 }
             }
 
+            if browser.compressFormat.isZip {
+                Toggle(isOn: $browser.compressSaveAsComicBookZip) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Save as comic book ZIP")
+                        Text("Uses the same ZIP format with a .cbz extension for comic readers.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             if browser.compressFormat.requiresSingleFile {
                 Text("\(browser.compressFormat.label) can only archive a single file.")
                     .font(.caption)
@@ -121,6 +132,9 @@ struct CompressSheet: View {
         .onChange(of: browser.compressFormat) { format in
             if !format.isDmg {
                 browser.compressDmgAppInstaller = false
+            }
+            if !format.isZip {
+                browser.compressSaveAsComicBookZip = false
             }
             if !format.supportsPassword {
                 browser.compressPassword = ""

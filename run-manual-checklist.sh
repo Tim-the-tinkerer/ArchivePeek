@@ -39,7 +39,7 @@ if [[ -x "$APP" ]]; then pass "ArchivePeek binary exists"; else fail "ArchivePee
 if [[ -x "$BUNDLED_7ZZ" ]]; then pass "Bundled 7zz exists"; else fail "Bundled 7zz missing"; fi
 if "$TOOLS" >/dev/null 2>&1; then pass "Materialized 7zz runs"; else fail "Materialized 7zz smoke test"; fi
 VER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ArchivePeek.app/Contents/Info.plist)
-[[ "$VER" == "1.0.22" ]] && pass "Version is 1.0.22" || fail "Version expected 1.0.22, got $VER"
+[[ "$VER" == "1.0.26" ]] && pass "Version is 1.0.26" || fail "Version expected 1.0.26, got $VER"
 
 echo
 echo "2. Browse / list archives"

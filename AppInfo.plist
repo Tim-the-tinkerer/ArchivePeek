@@ -16,6 +16,7 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.archivepeek.archive</string>
+				<string>com.archivepeek.cbz</string>
 				<string>com.archivepeek.diskimage</string>
 			</array>
 		</dict>
@@ -33,9 +34,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.22</string>
+	<string>1.0.26</string>
 	<key>CFBundleVersion</key>
-	<string>23</string>
+	<string>27</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSMultipleInstancesProhibited</key>
@@ -66,7 +67,6 @@
 					<string>arj</string>
 					<string>bz2</string>
 					<string>cab</string>
-					<string>cbz</string>
 					<string>cpio</string>
 					<string>deb</string>
 					<string>epub</string>
@@ -103,6 +103,28 @@
 					<string>xz</string>
 					<string>zip</string>
 					<string>zst</string>
+				</array>
+			</dict>
+		</dict>
+		<!-- Dedicated CBZ type: ZIP container, ZIP-style icon. Kept separate so Launch Services
+		     does not map comic books through the generic archive type (which can pick up another
+		     app’s icon, e.g. Comic Reader’s coffee cup). -->
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+				<string>public.data</string>
+				<string>public.content</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Comic Book ZIP</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.archivepeek.cbz</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>cbz</string>
 				</array>
 			</dict>
 		</dict>

@@ -60,8 +60,20 @@ enum CompressFormat: String, CaseIterable, Identifiable, Hashable, Sendable {
         self == .zip || self == .sevenZip || self == .dmg
     }
 
+    var isZip: Bool {
+        self == .zip
+    }
+
     var isDmg: Bool {
         self == .dmg
+    }
+
+    /// Output filename extension. Comic-book ZIP uses `.cbz` (ZIP container, CBZ name).
+    func outputExtension(comicBookZip: Bool = false) -> String {
+        if isZip && comicBookZip {
+            return "cbz"
+        }
+        return fileExtension
     }
 
     var supportsSolidArchive: Bool {

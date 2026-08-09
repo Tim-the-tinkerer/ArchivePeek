@@ -23,6 +23,8 @@ final class ArchiveBrowserModel: ObservableObject {
     @Published var compressPassword = ""
     @Published var compressSolidArchive = false
     @Published var compressDmgAppInstaller = false
+    /// When format is ZIP, write a comic-book ZIP (`.cbz`) instead of `.zip`.
+    @Published var compressSaveAsComicBookZip = false
     @Published var verifyAfterCompress = true
     @Published var isCompressing = false
     @Published var compressProgress: Double = 0
@@ -419,7 +421,13 @@ final class ArchiveBrowserModel: ObservableObject {
         compressPassword = ""
         compressSources.removeAll()
         compressDmgAppInstaller = AppSettings.defaultDmgAppInstaller
+        compressSaveAsComicBookZip = AppSettings.defaultComicBookZip && AppSettings.defaultCompressFormat.isZip
         releaseCompressAccess()
+    }
+
+    /// True when ZIP output should use the comic-book (`.cbz`) extension.
+    var saveAsComicBookZip: Bool {
+        compressFormat.isZip && compressSaveAsComicBookZip
     }
 
     var canCreateDmgAppInstaller: Bool {
@@ -474,11 +482,13 @@ final class ArchiveBrowserModel: ObservableObject {
 
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
+        let comicBookZip = saveAsComicBookZip
         panel.nameFieldStringValue = CompressionSupport.proposedArchiveName(
             for: compressSources,
-            format: compressFormat
+            format: compressFormat,
+            comicBookZip: comicBookZip
         )
-        panel.allowedContentTypes = allowedSaveTypes(for: compressFormat)
+        panel.allowedContentTypes = allowedSaveTypes(for: compressFormat, comicBookZip: comicBookZip)
         panel.prompt = "Create"
         panel.message = "Save the archive outside the folder being compressed (for example, on Desktop)."
         let format = compressFormat
@@ -487,7 +497,8 @@ final class ArchiveBrowserModel: ObservableObject {
             guard response == .OK, let picked = panel.url else { return }
             let destination = CompressionSupport.normalizedArchiveURL(
                 picked.standardizedFileURL,
-                format: format
+                format: format,
+                comicBookZip: comicBookZip
             )
             let destinationTokens = SecurityScopedAccess.captureTokens(for: [destination])
             Task { @MainActor in
@@ -498,8 +509,16 @@ final class ArchiveBrowserModel: ObservableObject {
         }
     }
 
-    private func allowedSaveTypes(for format: CompressFormat) -> [UTType] {
-        let ext = format.fileExtension
+    private func allowedSaveTypes(for format: CompressFormat, comicBookZip: Bool = false) -> [UTType] {
+        // Prefer the dedicated CBZ UTI (conforms to public.zip-archive) so Finder uses a ZIP-style
+        // icon instead of mapping through com.archivepeek.archive / another comic app’s icon.
+        if format.isZip && comicBookZip {
+            if let cbz = UTType(ArchiveFormatCatalog.cbzTypeIdentifier) {
+                return [cbz]
+            }
+            return [.zip]
+        }
+        let ext = format.outputExtension(comicBookZip: comicBookZip)
         if let type = UTType(filenameExtension: ext) {
             return [type]
         }
@@ -872,9 +891,11 @@ final class ArchiveBrowserModel: ObservableObject {
         let accessTokens = compressAccessTokens
         let generation = compressGeneration
 
+        let comicBookZip = saveAsComicBookZip
         let archiveDestination = CompressionSupport.normalizedArchiveURL(
             destination,
-            format: compressFormat
+            format: compressFormat,
+            comicBookZip: comicBookZip
         )
 
         isCompressing = true
@@ -935,9 +956,11 @@ final class ArchiveBrowserModel: ObservableObject {
             compressSources.removeAll()
             compressPassword = ""
             compressDmgAppInstaller = false
+            compressSaveAsComicBookZip = AppSettings.defaultComicBookZip
             if let created = CompressionSupport.existingArchiveOutput(
                 intended: archiveDestination,
-                format: compressFormat
+                format: compressFormat,
+                comicBookZip: comicBookZip
             ) {
                 NSWorkspace.shared.activateFileViewerSelecting([created])
             }

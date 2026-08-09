@@ -2,6 +2,9 @@ import Foundation
 import UniformTypeIdentifiers
 
 enum ArchiveFormatCatalog {
+    /// Dedicated comic-book ZIP type (exported in AppInfo.plist). Conforms to `public.zip-archive`.
+    static let cbzTypeIdentifier = "com.archivepeek.cbz"
+
     static let zipExtensions: Set<String> = [
         "zip", "jar", "cbz", "epub", "apk", "war", "whl", "xpi", "vsix", "nbm", "kmz", "odt", "ods", "odp",
     ]

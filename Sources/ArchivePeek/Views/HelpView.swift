@@ -45,6 +45,7 @@ struct HelpView: View {
                     helpSection("Compressing", icon: "doc.zipper") {
                         helpBullet("Choose **Compress** (⇧⌘N) or **Create Archive…** from the welcome screen.")
                         helpBullet("Supported output formats include ZIP, DMG, 7z, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, GZIP, BZIP2, and XZ.")
+                        helpBullet("Under **ZIP**, enable **Save as comic book ZIP** to write a standard ZIP with a `.cbz` extension for comic readers.")
                         helpBullet("**DMG** uses macOS hdiutil to create standard compressed or read-only disk images. DMG supports optional AES-256 encryption.")
                         helpBullet("When compressing a `.app` bundle to DMG, enable **App installer layout** to include an Applications folder shortcut for drag-to-install distribution.")
                         helpBullet("ZIP and **7z** prepare files first (with progress), then compress — reliable for large folders and developer projects on external volumes.")
@@ -68,9 +69,14 @@ struct HelpView: View {
 
                     helpSection("Settings", icon: "gearshape") {
                         helpBullet("Open **ArchivePeek → Settings…** (⌘,) to set default compression options.")
-                        helpBullet("Defaults include format, compression level, verify before replace, solid 7z, and DMG app installer layout.")
+                        helpBullet("Defaults include format, compression level, verify before replace, solid 7z, comic book ZIP (.cbz), and DMG app installer layout.")
                         helpBullet("Defaults are applied each time you open the Compress sheet.")
                         helpBullet("Use **Set ArchivePeek as Default for Archives** to make ArchivePeek the default app for ZIP, 7z, TAR, RAR, and similar archives. DMG and ISO are excluded.")
+                    }
+
+                    helpSection("Updates", icon: "arrow.down.circle") {
+                        helpBullet("Choose **ArchivePeek → Check for Updates…** or **Help → Check for Updates…** to compare your version with the latest GitHub release.")
+                        helpBullet("The project page is [github.com/Tim-the-tinkerer/ArchivePeek](https://github.com/Tim-the-tinkerer/ArchivePeek).")
                     }
 
                     helpSection("Drag & Drop", icon: "arrow.down.doc") {
@@ -126,6 +132,8 @@ struct HelpView: View {
         HStack(spacing: 12) {
             Button("Open Changelog") { openBundledResource(named: "CHANGELOG.md") }
             Button("Open README") { openBundledResource(named: "README.md") }
+            Button("GitHub") { NSWorkspace.shared.open(AppInfo.githubRepositoryURL) }
+            Button("Check for Updates…") { UpdateChecker.checkAndPresent() }
             Button("7-Zip License") { openBundledResource(named: "Tools/7-Zip-LICENSE.txt", fallback: "7-Zip-LICENSE.txt") }
             Spacer()
         }

@@ -7,6 +7,7 @@ enum AppSettings {
         static let verifyAfterCompress = "verifyAfterCompress"
         static let solidArchive = "defaultSolidArchive"
         static let dmgAppInstaller = "defaultDmgAppInstaller"
+        static let comicBookZip = "defaultComicBookZip"
     }
 
     private static let store = UserDefaults.standard
@@ -56,6 +57,11 @@ enum AppSettings {
         set { store.set(newValue, forKey: Keys.dmgAppInstaller) }
     }
 
+    static var defaultComicBookZip: Bool {
+        get { store.bool(forKey: Keys.comicBookZip) }
+        set { store.set(newValue, forKey: Keys.comicBookZip) }
+    }
+
     @MainActor
     static func applyCompressionDefaults(to browser: ArchiveBrowserModel) {
         browser.compressFormat = defaultCompressFormat
@@ -63,5 +69,6 @@ enum AppSettings {
         browser.verifyAfterCompress = defaultVerifyAfterCompress
         browser.compressSolidArchive = defaultSolidArchive
         browser.compressDmgAppInstaller = defaultDmgAppInstaller
+        browser.compressSaveAsComicBookZip = defaultComicBookZip && defaultCompressFormat.isZip
     }
 }

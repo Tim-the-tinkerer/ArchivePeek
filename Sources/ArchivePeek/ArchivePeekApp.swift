@@ -34,6 +34,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var mainWindow: NSWindow?
     private var pendingOpenURL: URL?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Keep Launch Services UTI bindings (e.g. com.archivepeek.cbz) current so
+        // document icons do not stick on an older ArchivePeek.app registration.
+        DefaultAppRegistration.registerBundleWithLaunchServices()
+    }
+
     func setBrowser(_ browser: ArchiveBrowserModel) {
         self.browser = browser
         refreshWindowDropHandling()
@@ -172,6 +178,11 @@ struct ArchivePeekApp: App {
             SettingsView()
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    UpdateChecker.checkAndPresent()
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Compress…") {
                     browser.presentCompressSheet()
@@ -192,6 +203,13 @@ struct ArchivePeekApp: App {
                     browser.showHelpSheet = true
                 }
                 .keyboardShortcut("?", modifiers: .command)
+                Divider()
+                Button("Check for Updates…") {
+                    UpdateChecker.checkAndPresent()
+                }
+                Button("ArchivePeek on GitHub") {
+                    NSWorkspace.shared.open(AppInfo.githubRepositoryURL)
+                }
                 Divider()
                 Button("7-Zip License") {
                     openSevenZipLicense()

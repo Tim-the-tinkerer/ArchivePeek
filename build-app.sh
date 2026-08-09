@@ -49,6 +49,18 @@ echo "Bundling archive tools..."
 
 touch "${APP}"
 
+# Keep /Applications in sync so Launch Services does not prefer a stale ArchivePeek
+# (older builds still mapped .cbz onto the generic archive type and wrong Finder icons).
+if [[ -d /Applications ]]; then
+    echo "Installing to /Applications/ArchivePeek.app..."
+    rm -rf /Applications/ArchivePeek.app
+    cp -R "${APP}" /Applications/ArchivePeek.app
+    LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    if [[ -x "${LSREGISTER}" ]]; then
+        "${LSREGISTER}" -f /Applications/ArchivePeek.app >/dev/null 2>&1 || true
+    fi
+fi
+
 echo "Done: ${APP}"
 if [[ "${LAUNCH}" == "true" ]]; then
     echo "Launching..."

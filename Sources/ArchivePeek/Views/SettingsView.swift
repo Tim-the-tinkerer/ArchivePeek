@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Keys.verifyAfterCompress) private var verifyAfterCompress = true
     @AppStorage(AppSettings.Keys.solidArchive) private var solidArchive = false
     @AppStorage(AppSettings.Keys.dmgAppInstaller) private var dmgAppInstaller = false
+    @AppStorage(AppSettings.Keys.comicBookZip) private var comicBookZip = false
 
     @State private var defaultAppSummary = ""
     @State private var defaultAppMessage: String?
@@ -40,13 +41,17 @@ struct SettingsView: View {
                     Toggle("Solid archive (7z)", isOn: $solidArchive)
                 }
 
+                if compressFormat.wrappedValue.isZip {
+                    Toggle("Save ZIP as comic book (.cbz)", isOn: $comicBookZip)
+                }
+
                 if compressFormat.wrappedValue.isDmg {
                     Toggle("DMG app installer layout", isOn: $dmgAppInstaller)
                 }
             } header: {
                 Text("Compression")
             } footer: {
-                Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. DMG app installer layout is used when compressing .app bundles to DMG.")
+                Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. Comic book ZIP saves a standard ZIP with a .cbz extension. DMG app installer layout is used when compressing .app bundles to DMG.")
             }
 
             Section {
@@ -80,10 +85,27 @@ struct SettingsView: View {
             } footer: {
                 Text("Registers ArchivePeek for archive types such as ZIP, 7z, TAR, and RAR. DMG and ISO are excluded — use Disk Utility or Finder for those. macOS may ask you to confirm a single change.")
             }
+
+            Section {
+                Text("Version \(AppInfo.versionLabel)")
+                    .foregroundStyle(.secondary)
+
+                Button("Check for Updates…") {
+                    UpdateChecker.checkAndPresent()
+                }
+
+                Button("ArchivePeek on GitHub") {
+                    NSWorkspace.shared.open(AppInfo.githubRepositoryURL)
+                }
+            } header: {
+                Text("About")
+            } footer: {
+                Text("Checks the latest release on GitHub (github.com/Tim-the-tinkerer/ArchivePeek). Updates are installed by downloading a new build from Releases.")
+            }
         }
         .formStyle(.grouped)
         .frame(minWidth: 520, idealWidth: 520, maxWidth: 520)
-        .frame(minHeight: 620, idealHeight: 620, maxHeight: 620)
+        .frame(minHeight: 680, idealHeight: 680, maxHeight: 680)
         .onAppear {
             refreshDefaultAppStatus()
         }

@@ -26,13 +26,20 @@ enum DefaultAppRegistration {
         return "ArchivePeek is not the default app for archives."
     }
 
+    /// Re-register this app’s Info.plist types with Launch Services (exported UTIs, document roles).
+    /// Call on launch so an older `/Applications/ArchivePeek.app` does not keep stale extension maps
+    /// (e.g. `.cbz` under the generic archive type, which produced wrong Finder icons).
+    static func registerBundleWithLaunchServices() {
+        let appURL = Bundle.main.bundleURL as CFURL
+        LSRegisterURL(appURL, true)
+    }
+
     static func setAsDefaultArchiveApplication() -> RegistrationResult {
         guard let bundleID = Bundle.main.bundleIdentifier else {
             return RegistrationResult(succeeded: false)
         }
 
-        let appURL = Bundle.main.bundleURL as CFURL
-        LSRegisterURL(appURL, true)
+        registerBundleWithLaunchServices()
 
         let status = LSSetDefaultRoleHandlerForContentType(
             archiveTypeIdentifier as CFString,
