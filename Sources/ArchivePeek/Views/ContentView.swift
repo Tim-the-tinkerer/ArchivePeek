@@ -209,7 +209,9 @@ struct ContentView: View {
         panel.message = "Choose an archive to browse."
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            browser.openArchive(url)
+            let standardized = url.standardizedFileURL
+            let tokens = SecurityScopedAccess.captureTokens(for: [standardized])
+            browser.openArchive(standardized, accessTokens: tokens)
         }
     }
 

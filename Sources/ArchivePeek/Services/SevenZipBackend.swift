@@ -25,7 +25,11 @@ enum SevenZipBackend {
         return .commandFailed(message.isEmpty ? fallback : message)
     }
 
-    static func verify(at url: URL, password: String?) throws -> String {
+    static func verify(
+        at url: URL,
+        password: String?,
+        handle: ProcessRunner.Handle? = nil
+    ) throws -> String {
         guard let sevenZip = ToolLocator.sevenZipPath else {
             throw ArchiveError.toolUnavailable("7-Zip")
         }
@@ -34,7 +38,8 @@ enum SevenZipBackend {
         arguments.append(contentsOf: passwordArguments(for: password))
         arguments.append(url.path)
 
-        let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments)
+        let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
+        if result.wasCancelled { throw ArchiveError.cancelled }
         guard result.exitCode == 0 else {
             let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
             throw mapFailure(message, fallback: "7-Zip integrity test failed")
@@ -47,16 +52,23 @@ enum SevenZipBackend {
         return message.isEmpty ? "Integrity check passed." : message
     }
 
-    static func list(at url: URL, maxEntries: Int, password: String?) throws -> [ArchiveEntry] {
+    static func list(
+        at url: URL,
+        maxEntries: Int,
+        password: String?,
+        handle: ProcessRunner.Handle? = nil
+    ) throws -> [ArchiveEntry] {
         guard let sevenZip = ToolLocator.sevenZipPath else {
             throw ArchiveError.toolUnavailable("7-Zip")
         }
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
         var arguments = ["l", "-slt", "-ba", "-bd", "-bb0"]
         arguments.append(contentsOf: passwordArguments(for: password))
         arguments.append(url.path)
 
-        let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments)
+        let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
+        if result.wasCancelled { throw ArchiveError.cancelled }
         guard result.exitCode == 0 else {
             let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
             throw mapFailure(message, fallback: "7-Zip listing failed")
@@ -74,7 +86,8 @@ enum SevenZipBackend {
         from archive: URL,
         to destination: URL,
         preservePaths: Bool,
-        password: String?
+        password: String?,
+        handle: ProcessRunner.Handle? = nil
     ) throws {
         guard let sevenZip = ToolLocator.sevenZipPath else {
             throw ArchiveError.toolUnavailable("7-Zip")
@@ -89,11 +102,13 @@ enum SevenZipBackend {
         try PathSafety.validateEntries(entries)
 
         for entry in entries where !entry.isDirectory {
+            if handle?.wasCancelled == true { throw ArchiveError.cancelled }
             var arguments = [mode, "-y"]
             arguments.append(contentsOf: passwordArguments(for: password))
             arguments.append(contentsOf: [archive.path, entry.path, "-o\(outputDirectory)"])
 
-            let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments)
+            let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
+            if result.wasCancelled { throw ArchiveError.cancelled }
             guard result.exitCode == 0 else {
                 let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
                 throw mapFailure(message, fallback: "7-Zip extraction failed")
@@ -101,17 +116,24 @@ enum SevenZipBackend {
         }
     }
 
-    static func extractAll(from archive: URL, to destination: URL, password: String?) throws {
+    static func extractAll(
+        from archive: URL,
+        to destination: URL,
+        password: String?,
+        handle: ProcessRunner.Handle? = nil
+    ) throws {
         guard let sevenZip = ToolLocator.sevenZipPath else {
             throw ArchiveError.toolUnavailable("7-Zip")
         }
 
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let outputDirectory = destination.path.hasSuffix("/") ? destination.path : destination.path + "/"
         var arguments = ["x", "-y"]
         arguments.append(contentsOf: passwordArguments(for: password))
         arguments.append(contentsOf: [archive.path, "-o\(outputDirectory)"])
 
-        let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments)
+        let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
+        if result.wasCancelled { throw ArchiveError.cancelled }
         guard result.exitCode == 0 else {
             let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
             throw mapFailure(message, fallback: "7-Zip extraction failed")
@@ -126,6 +148,7 @@ enum SevenZipBackend {
         password: String?,
         solidArchive: Bool = false,
         handle: ProcessRunner.Handle? = nil,
+        beforeCommit: ((URL) throws -> Void)? = nil,
         onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
     ) throws {
         guard let sevenZip = ToolLocator.sevenZipPath else {
@@ -148,10 +171,16 @@ enum SevenZipBackend {
             indeterminate: true
         ))
 
-        let staged = try CompressionSupport.stageForSevenZip(sources, onProgress: { update in
-            onProgress?(update)
-        })
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+
+        let staged = try CompressionSupport.stageForSevenZip(
+            sources,
+            onProgress: { update in onProgress?(update) },
+            isCancelled: { handle?.wasCancelled == true }
+        )
         defer { staged.cleanup() }
+
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
         let workSources = staged.urls
 
@@ -165,6 +194,13 @@ enum SevenZipBackend {
             archive: archive,
             format: format
         )
+        // Always build in a temp file; remove it on cancel/failure (success moves it away).
+        var didFinalize = false
+        defer {
+            if !didFinalize {
+                CompressionSupport.cleanupCompressionDestination(destination)
+            }
+        }
 
         let context = try CompressionSupport.compressionInvocation(for: workSources, archive: destination.workURL)
         try FileManager.default.createDirectory(at: context.workingDirectory, withIntermediateDirectories: true)
@@ -202,11 +238,13 @@ enum SevenZipBackend {
         arguments.append(contentsOf: context.itemNames)
 
         CompressDiagnostics.log("7zz path: \(sevenZip)")
-        CompressDiagnostics.log("7zz args: \(arguments.joined(separator: " "))")
+        // Never write -pPASSWORD into compress.log.
+        CompressDiagnostics.log("7zz args: \(CompressDiagnostics.redactedArgumentList(arguments))")
         CompressDiagnostics.log("7zz starting (large trees / solid+max can take a minute)…")
 
-        // Stream stdout so solid/max compression of large projects (e.g. SwiftPM .build)
-        // shows live progress instead of looking hung on an indeterminate spinner.
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+
+        // Live chunks via ProcessRunner readabilityHandler (not readDataToEndOfFile).
         let parser = SevenZipProgressParser()
         let result = try ProcessRunner.runMonitored(
             executable: sevenZip,
@@ -243,8 +281,6 @@ enum SevenZipBackend {
         }
         CompressDiagnostics.log("7zz finished exit=0")
 
-        onProgress?(CompressionProgressUpdate(fraction: 0.98, message: "Saving archive…", indeterminate: true))
-
         let createdWorkURL = CompressionSupport.existingArchiveOutput(
             intended: destination.workURL,
             format: format
@@ -261,13 +297,15 @@ enum SevenZipBackend {
                 shouldRelocate: destination.shouldRelocate
             )
         }
-        CompressDiagnostics.log("moving archive to \(destination.finalURL.path)")
-        try CompressionSupport.finalizeCompressionDestination(relocation)
-        CompressDiagnostics.log("archive saved")
-
+        // Junk strip and verify-before-commit run on work/sibling, never after replacing final.
         if format == .zip {
-            try CompressionSupport.stripMacJunkFromZip(at: destination.finalURL)
+            try CompressionSupport.stripMacJunkFromZip(at: relocation.workURL)
         }
+        CompressDiagnostics.log("committing archive to \(destination.finalURL.path)")
+        onProgress?(CompressionProgressUpdate(fraction: 0.98, message: "Saving archive…", indeterminate: true))
+        try CompressionSupport.finalizeCompressionDestination(relocation, beforeCommit: beforeCommit)
+        didFinalize = true
+        CompressDiagnostics.log("archive saved")
 
         onProgress?(CompressionProgressUpdate(fraction: 1.0, message: "Finishing…", indeterminate: false))
 
@@ -283,12 +321,14 @@ enum SevenZipBackend {
         entry: ArchiveEntry,
         from archive: URL,
         to destination: URL,
-        password: String?
+        password: String?,
+        handle: ProcessRunner.Handle? = nil
     ) throws {
         guard let sevenZip = ToolLocator.sevenZipPath else {
             throw ArchiveError.toolUnavailable("7-Zip")
         }
 
+        try PathSafety.validateArchiveEntryPath(entry.path)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
         let outputDirectory = destination.path.hasSuffix("/") ? destination.path : destination.path + "/"
@@ -301,19 +341,32 @@ enum SevenZipBackend {
         arguments.append(contentsOf: passwordArguments(for: password))
         arguments.append(contentsOf: [archive.path, "\(prefix)/*", "-o\(outputDirectory)"])
 
-        let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments)
+        let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
+        if result.wasCancelled { throw ArchiveError.cancelled }
         guard result.exitCode == 0 else {
             let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
             throw mapFailure(message, fallback: "7-Zip folder extraction failed")
         }
     }
 
-    static func extractToTemp(entry: ArchiveEntry, from archive: URL, password: String?) throws -> URL {
+    static func extractToTemp(
+        entry: ArchiveEntry,
+        from archive: URL,
+        password: String?,
+        handle: ProcessRunner.Handle? = nil
+    ) throws -> URL {
         let tempRoot = fileManagerTemporaryDirectory()
             .appendingPathComponent("ArchivePeek-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
         TempFileRegistry.registerExtractRoot(tempRoot)
-        try extract(entries: [entry], from: archive, to: tempRoot, preservePaths: true, password: password)
+        try extract(
+            entries: [entry],
+            from: archive,
+            to: tempRoot,
+            preservePaths: true,
+            password: password,
+            handle: handle
+        )
 
         let extracted = try PathSafety.resolvedURL(forEntryPath: entry.normalizedPath, in: tempRoot)
         guard FileManager.default.fileExists(atPath: extracted.path) else {

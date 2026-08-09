@@ -53,7 +53,7 @@ struct HelpView: View {
                         helpBullet("Prefer compressing the **project folder** as one item (not multi-selecting individual files) so nothing is left out.")
                         helpBullet("Add all files and folders in one step (one drag or one **Add Files** selection) to minimize macOS folder permission prompts.")
                         helpBullet("After creation, ArchivePeek reveals the new file in Finder but does not open it automatically.")
-                        helpBullet("Enable **Verify integrity after creation** to test new archives for corruption when compression finishes.")
+                        helpBullet("Enable **Verify before replacing** to integrity-test the new archive before replacing any file already at the destination.")
                         helpBullet("Use **Verify Integrity** in the toolbar to test the currently open archive.")
                         helpBullet("Only macOS junk is stripped: `.DS_Store`, AppleDouble (`._*`), and `__MACOSX`. Project files such as `.gitignore` are kept.")
                         helpBullet("If compression fails, open `~/Library/Logs/ArchivePeek/compress.log` for diagnostic details.")
@@ -68,7 +68,7 @@ struct HelpView: View {
 
                     helpSection("Settings", icon: "gearshape") {
                         helpBullet("Open **ArchivePeek → Settings…** (⌘,) to set default compression options.")
-                        helpBullet("Defaults include format, compression level, verify after creation, solid 7z, and DMG app installer layout.")
+                        helpBullet("Defaults include format, compression level, verify before replace, solid 7z, and DMG app installer layout.")
                         helpBullet("Defaults are applied each time you open the Compress sheet.")
                         helpBullet("Use **Set ArchivePeek as Default for Archives** to make ArchivePeek the default app for ZIP, 7z, TAR, RAR, and similar archives. DMG and ISO are excluded.")
                     }

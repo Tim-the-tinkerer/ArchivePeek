@@ -39,7 +39,7 @@ if [[ -x "$APP" ]]; then pass "ArchivePeek binary exists"; else fail "ArchivePee
 if [[ -x "$BUNDLED_7ZZ" ]]; then pass "Bundled 7zz exists"; else fail "Bundled 7zz missing"; fi
 if "$TOOLS" >/dev/null 2>&1; then pass "Materialized 7zz runs"; else fail "Materialized 7zz smoke test"; fi
 VER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ArchivePeek.app/Contents/Info.plist)
-[[ "$VER" == "1.0.10" ]] && pass "Version is 1.0.10" || fail "Version expected 1.0.10, got $VER"
+[[ "$VER" == "1.0.22" ]] && pass "Version is 1.0.22" || fail "Version expected 1.0.22, got $VER"
 
 echo
 echo "2. Browse / list archives"
@@ -149,7 +149,7 @@ ln -s "Sources/main.swift" "$PROJ/link-to-main"
 mkdir -p "$PROJ/__MACOSX"
 echo "res" > "$PROJ/__MACOSX/junk"
 
-# Mirror CompressionSupport.stageForSevenZip keep/skip rules (Mac junk only).
+# Mirror production stageForSevenZip: whole-tree copyItem + prune Mac junk only.
 STAGE="$TMP/stage-src"
 mkdir -p "$STAGE"
 swift - "$PROJ" "$STAGE" <<'SWIFT'
@@ -162,64 +162,21 @@ let source = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 let destination = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
   .appendingPathComponent(source.lastPathComponent, isDirectory: true)
 let fm = FileManager.default
-try fm.createDirectory(at: destination, withIntermediateDirectories: true)
 func shouldSkip(_ name: String) -> Bool {
   name == ".DS_Store" || name == "__MACOSX" || name.hasPrefix("._")
 }
-func normalize(_ path: String) -> String {
-  var p = path
-  if p.hasPrefix("/var/") { p = "/private" + p }
-  else if p == "/var" { p = "/private/var" }
-  while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
-  return p
-}
-func relativePath(item: URL, root: URL) -> String? {
-  let rootPath = normalize(root.path)
-  let itemPath = normalize(item.path)
-  if itemPath == rootPath { return "" }
-  let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-  guard itemPath.hasPrefix(prefix) else { return nil }
-  return String(itemPath.dropFirst(prefix.count))
-}
-guard let en = fm.enumerator(at: source, includingPropertiesForKeys: [
-  .isSymbolicLinkKey
-], options: []) else { fatalError("enum") }
-for case let item as URL in en {
-  guard let relative = relativePath(item: item, root: source), !relative.isEmpty else { continue }
-  let name = item.lastPathComponent
-  let isLink = (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-  // Symlinks first: never ask isDirectory (follows target, can hang). Recreate link text only.
-  if isLink {
-    if shouldSkip(name) { continue }
-    let target = destination.appendingPathComponent(relative)
-    try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let text = try fm.destinationOfSymbolicLink(atPath: item.path)
-    try? fm.removeItem(at: target)
-    try fm.createSymbolicLink(atPath: target.path, withDestinationPath: text)
-    continue
+try? fm.removeItem(at: destination)
+try fm.copyItem(at: source, to: destination)
+// pruneMacJunk — subpathsOfDirectory (enumerator skips many ._* names)
+if let subpaths = try? fm.subpathsOfDirectory(atPath: destination.path) {
+  var toDelete: [URL] = []
+  for sub in subpaths {
+    let name = (sub as NSString).lastPathComponent
+    if shouldSkip(name) { toDelete.append(destination.appendingPathComponent(sub)) }
   }
-  if shouldSkip(name) {
-    if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { en.skipDescendants() }
-    continue
+  for url in toDelete.sorted(by: { $0.path.count > $1.path.count }) {
+    try? fm.removeItem(at: url)
   }
-  let values = try item.resourceValues(forKeys: [
-    .isRegularFileKey, .isDirectoryKey, .isPackageKey
-  ])
-  if values.isPackage == true {
-    let target = destination.appendingPathComponent(relative)
-    try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try fm.copyItem(at: item, to: target)
-    en.skipDescendants()
-    continue
-  }
-  if values.isDirectory == true {
-    try fm.createDirectory(at: destination.appendingPathComponent(relative), withIntermediateDirectories: true)
-    continue
-  }
-  guard values.isRegularFile == true else { continue }
-  let target = destination.appendingPathComponent(relative)
-  try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-  try fm.copyItem(at: item, to: target)
 }
 print("staged")
 SWIFT
@@ -249,6 +206,69 @@ echo "$LIST7" | grep -Fq ".DS_Store" && fail "7z archive should not contain .DS_
 LISTZ=$(/usr/bin/zipinfo -1 "$OUT/project.zip" 2>/dev/null || true)
 echo "$LISTZ" | grep -q "\.gitignore" && pass "ZIP archive contains .gitignore" || fail "ZIP archive contains .gitignore"
 echo "$LISTZ" | grep -q "\.git/" && pass "ZIP archive contains .git" || fail "ZIP archive contains .git"
+
+# Password redaction in diagnostics (never log -pSECRET)
+REDACT_OUT=$(swift - <<'SWIFT'
+import Foundation
+func redact(_ argument: String) -> String {
+  if argument.hasPrefix("-p"), argument.count > 2 { return "-p***" }
+  if argument.hasPrefix("--password="), argument.count > "--password=".count { return "--password=***" }
+  return argument
+}
+let args = ["a", "-t7z", "-psecret123", "-mx9", "out.7z"]
+let joined = args.map(redact).joined(separator: " ")
+if joined.contains("-p***") && !joined.contains("secret123") {
+  print("ok")
+} else {
+  print("bad")
+}
+SWIFT
+)
+if echo "$REDACT_OUT" | grep -q ok \
+  && grep -q 'redactedArgumentList\|redactArgument' Sources/ArchivePeek/Services/CompressDiagnostics.swift; then
+  pass "CompressDiagnostics redacts password args"
+else
+  fail "CompressDiagnostics redacts password args"
+fi
+
+# Duplicate basename detection is in production code (case-insensitive for APFS)
+if grep -q 'validateUniqueStagingBasenames' Sources/ArchivePeek/Services/CompressionSupport.swift \
+  && grep -q 'lowercased(with:' Sources/ArchivePeek/Services/CompressionSupport.swift; then
+  pass "Staging rejects duplicate basenames (case-insensitive)"
+else
+  fail "Staging rejects duplicate basenames (case-insensitive)"
+fi
+
+# Every format must write to a temp work file first (never clobber destination on failure)
+if grep -q 'Always build in a unique temp file' Sources/ArchivePeek/Services/CompressionSupport.swift \
+  && grep -q 'return temporaryCompressionDestination' Sources/ArchivePeek/Services/CompressionSupport.swift \
+  && ! grep -q 'removeItem(at: archiveDestination)' Sources/ArchivePeek/Models/ArchiveBrowserModel.swift; then
+  pass "Compress always uses temp output; error cleanup does not delete destination"
+else
+  fail "Compress always uses temp output; error cleanup does not delete destination"
+fi
+
+# Atomic commit: sibling stage + replaceItemAt (no delete-final-then-move)
+if grep -q 'replaceItemAt' Sources/ArchivePeek/Services/CompressionSupport.swift \
+  && grep -q 'beforeCommit' Sources/ArchivePeek/Services/CompressionSupport.swift \
+  && grep -q 'verifyBeforeCommit' Sources/ArchivePeek/Services/ArchiveEngine.swift; then
+  pass "Atomic sibling commit and verify-before-commit"
+else
+  fail "Atomic sibling commit and verify-before-commit"
+fi
+
+# Live streaming (not readDataToEndOfFile for progress path)
+if grep -q 'readabilityHandler' Sources/ArchivePeek/Services/ProcessRunner.swift \
+  && ! grep -n 'readDataToEndOfFile' Sources/ArchivePeek/Services/ProcessRunner.swift | grep -v '//' | grep -q .; then
+  pass "ProcessRunner uses live readabilityHandler"
+else
+  # allow remaining readToEnd after exit
+  if grep -q 'readabilityHandler' Sources/ArchivePeek/Services/ProcessRunner.swift; then
+    pass "ProcessRunner uses live readabilityHandler"
+  else
+    fail "ProcessRunner uses live readabilityHandler"
+  fi
+fi
 
 echo
 echo "5. Security / path safety (zip-slip blocked at app layer)"

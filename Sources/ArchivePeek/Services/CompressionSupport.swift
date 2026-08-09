@@ -63,10 +63,11 @@ enum CompressionSupport {
             return Int64(size)
         }
 
+        // Include hidden project trees (.git, .build, etc.) so status size matches what we archive.
         guard let enumerator = fileManager.enumerator(
             at: url,
             includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else { return 0 }
 
         var total: Int64 = 0
@@ -87,9 +88,15 @@ enum CompressionSupport {
     /// Uses whole-tree `copyItem` (not file-by-file walk) so large SwiftPM `.build` trees,
     /// `.app` bundles, and framework layouts stay intact and prepare does not hang on symlink
     /// target resolution mid-walk.
+    ///
+    /// - Parameter isCancelled: polled **between** top-level items so Cancel during prepare
+    ///   aborts before the next item / compressor starts. A single whole-tree `copyItem` of a
+    ///   huge folder is not interruptible mid-copy (by design — whole-tree copy avoids hangs
+    ///   and incompleteness from file-by-file walks); Cancel is observed when that copy returns.
     static func stageForSevenZip(
         _ sources: [URL],
         onProgress: ((CompressionProgressUpdate) -> Void)? = nil,
+        isCancelled: (() -> Bool)? = nil,
         fileManager: FileManager = .default
     ) throws -> StagedCompressSources {
         let standardized = sources.map { $0.standardizedFileURL }
@@ -97,12 +104,21 @@ enum CompressionSupport {
             throw ArchiveError.invalidSelection
         }
 
+        try validateUniqueStagingBasenames(standardized)
+
+        if isCancelled?() == true { throw ArchiveError.cancelled }
+
         let stagingRoot = fileManager.temporaryDirectory
             .appendingPathComponent("ArchivePeek-input-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
 
-        var stagedCount = 0
+        var stagedItems = 0
         for (index, source) in standardized.enumerated() {
+            if isCancelled?() == true {
+                try? fileManager.removeItem(at: stagingRoot)
+                throw ArchiveError.cancelled
+            }
+
             var isDirectory: ObjCBool = false
             // fileExists follows symlinks for the isDirectory check; also accept plain symlinks.
             let exists = fileManager.fileExists(atPath: source.path, isDirectory: &isDirectory)
@@ -116,11 +132,10 @@ enum CompressionSupport {
             let destination = stagingRoot.appendingPathComponent(source.lastPathComponent)
             let isSymlink = (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
             let label = source.lastPathComponent
-            let sizeHint = formattedSourceSize([source], fileManager: fileManager)
-            let sizeSuffix = sizeHint.isEmpty ? "" : " (\(sizeHint))"
+            // Avoid size walks here: they re-enumerate huge trees and can resolve symlink targets.
             onProgress?(CompressionProgressUpdate(
                 fraction: 0,
-                message: "Preparing \(label)\(sizeSuffix)… \(index + 1)/\(standardized.count)",
+                message: "Preparing \(label)… \(index + 1)/\(standardized.count)",
                 indeterminate: true
             ))
             CompressDiagnostics.log("staging copy: \(source.path) → \(destination.path)")
@@ -128,18 +143,20 @@ enum CompressionSupport {
             if isSymlink {
                 // Link text only — never open the target (hangs on dead mounts / loops).
                 try copySymlinkWithoutResolving(from: source, to: destination, fileManager: fileManager)
-                stagedCount += 1
             } else {
                 // Whole-tree copy preserves packages, symlinks, empty dirs, and hidden project files.
                 try copyCompressItem(from: source, to: destination, fileManager: fileManager)
                 if isDirectory.boolValue {
                     try pruneMacJunk(from: destination, fileManager: fileManager)
-                    stagedCount += regularFileCount(at: destination, fileManager: fileManager)
-                } else {
-                    stagedCount += 1
                 }
             }
+            stagedItems += 1
             CompressDiagnostics.log("staging finished item: \(label)")
+        }
+
+        if isCancelled?() == true {
+            try? fileManager.removeItem(at: stagingRoot)
+            throw ArchiveError.cancelled
         }
 
         // Include hidden top-level items (e.g. `.git`, `.gitignore`).
@@ -152,7 +169,8 @@ enum CompressionSupport {
             throw ArchiveError.commandFailed("Nothing to compress after preparing files.")
         }
 
-        CompressDiagnostics.log("staged \(stagedCount) file(s) for compression under \(stagingRoot.path)")
+        // Log item count only — do not re-walk staged trees for file totals.
+        CompressDiagnostics.log("staged \(stagedItems) top-level item(s) under \(stagingRoot.path)")
 
         return StagedCompressSources(
             urls: allStagedURLs.sorted {
@@ -164,27 +182,41 @@ enum CompressionSupport {
         )
     }
 
-    /// Remove only macOS junk from an already-copied tree. Never follows symlink targets.
+    /// Staging uses `lastPathComponent` only; two sources with the same basename would overwrite.
+    /// Comparison is case-insensitive: the default APFS/HFS+ volume (and temp dir) is usually
+    /// case-insensitive, so `Foo` and `foo` collide even though Swift String equality does not.
+    static func validateUniqueStagingBasenames(_ sources: [URL]) throws {
+        var seen: [String: String] = [:] // lowercased key → display name
+        var duplicates = Set<String>()
+        for source in sources {
+            let name = source.lastPathComponent
+            if shouldSkipStagingFileName(name) { continue }
+            let key = name.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            if let existing = seen[key] {
+                duplicates.insert(existing)
+                duplicates.insert(name)
+            } else {
+                seen[key] = name
+            }
+        }
+        if !duplicates.isEmpty {
+            throw ArchiveError.duplicateSourceNames(duplicates.sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            })
+        }
+    }
+
+    /// Remove only macOS junk from an already-copied tree.
+    /// Uses `subpathsOfDirectory` rather than `enumerator`: NSDirectoryEnumerator often omits
+    /// AppleDouble `._*` files even when they exist as real names on disk.
     private static func pruneMacJunk(from root: URL, fileManager: FileManager) throws {
-        guard let enumerator = fileManager.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isSymbolicLinkKey],
-            options: []
-        ) else { return }
+        guard let subpaths = try? fileManager.subpathsOfDirectory(atPath: root.path) else { return }
 
         var toDelete: [URL] = []
-        for case let item as URL in enumerator {
-            let name = item.lastPathComponent
+        for sub in subpaths {
+            let name = (sub as NSString).lastPathComponent
             guard shouldSkipStagingFileName(name) else { continue }
-            toDelete.append(item)
-            // Skip into junk directories (e.g. __MACOSX) without resolving any symlink.
-            let isLink = (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-            if !isLink {
-                var isDir: ObjCBool = false
-                if fileManager.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue {
-                    enumerator.skipDescendants()
-                }
-            }
+            toDelete.append(root.appendingPathComponent(sub))
         }
         // Deepest paths first so directory removes succeed after children are gone.
         for url in toDelete.sorted(by: { $0.path.count > $1.path.count }) {
@@ -211,26 +243,6 @@ enum CompressionSupport {
         if name == ".DS_Store" || name == "__MACOSX" { return true }
         if name.hasPrefix("._") { return true }
         return false
-    }
-
-    private static func regularFileCount(at url: URL, fileManager: FileManager) -> Int {
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return 0 }
-        if !isDirectory.boolValue { return 1 }
-
-        guard let enumerator = fileManager.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: []
-        ) else { return 0 }
-
-        var count = 0
-        for case let item as URL in enumerator {
-            if (try? item.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
-                count += 1
-            }
-        }
-        return count
     }
 
     static func context(for sources: [URL], fileManager: FileManager = .default) throws -> Context {
@@ -271,27 +283,17 @@ enum CompressionSupport {
         return Context(workingDirectory: workingDirectory, itemNames: itemNames)
     }
 
-    /// Absolute source paths with cwd at the archive's parent — used for 7-Zip.
+    /// Relative item names with cwd at the nearest common parent — for 7-Zip after staging.
+    /// Absolute paths would be stored inside the archive as rooted temp paths; use relatives only.
     static func compressionInvocation(
         for sources: [URL],
         archive: URL,
         fileManager: FileManager = .default
     ) throws -> Context {
-        let standardized = sources.map { $0.standardizedFileURL }
-        guard !standardized.isEmpty else {
-            throw ArchiveError.invalidSelection
-        }
-
-        for source in standardized {
-            guard fileManager.fileExists(atPath: source.path) else {
-                throw ArchiveError.entryNotFound(source.lastPathComponent)
-            }
-        }
-
-        return Context(
-            workingDirectory: archive.deletingLastPathComponent().standardizedFileURL,
-            itemNames: standardized.map(\.path)
-        )
+        // Same layout as zip: cwd = common parent (staging root), names = basenames / relatives.
+        // `archive` is only validated for existence of a parent dir when creating the work file.
+        _ = archive
+        return try zipContext(for: sources, fileManager: fileManager)
     }
 
     static func normalizedArchiveURL(_ url: URL, format: CompressFormat) -> URL {
@@ -379,57 +381,139 @@ enum CompressionSupport {
         return directory.appendingPathComponent("\(base) \(UUID().uuidString.prefix(6))\(suffix)")
     }
 
+    /// Always build in a unique temp file; replace the final path only after success.
+    ///
+    /// This is a fundamental ArchivePeek rule for every format (ZIP, 7z, TAR, DMG, ditto):
+    /// if the user is overwriting `Backup.zip` and compression fails, the existing archive
+    /// must remain untouched. Writing directly to the final path would risk truncating it
+    /// mid-run and would force error cleanup to decide whether the final file is “ours.”
     static func compressionDestination(
         archive: URL,
         sources: [URL],
         format: CompressFormat,
         fileManager: FileManager = .default
     ) -> CompressionDestination {
-        let finalURL = archive.standardizedFileURL
-        if archiveIsInsideSourceTree(finalURL, sources: sources, fileManager: fileManager) {
-            return temporaryCompressionDestination(archive: finalURL, format: format, fileManager: fileManager)
-        }
-        return CompressionDestination(workURL: finalURL, finalURL: finalURL, shouldRelocate: false)
+        _ = sources // retained for call-site symmetry / future nested-archive checks
+        return temporaryCompressionDestination(archive: archive, format: format, fileManager: fileManager)
     }
 
-    /// Build in a temp file first, then move into place with app security scope (child tools cannot write to TCC paths).
+    /// Build in a temp file first, then move into place with app security scope
+    /// (child tools often cannot write to TCC-protected final folders).
     static func temporaryCompressionDestination(
         archive: URL,
         format: CompressFormat,
         fileManager: FileManager = .default
     ) -> CompressionDestination {
         let finalURL = archive.standardizedFileURL
-        let ext = finalURL.pathExtension.isEmpty ? format.fileExtension : finalURL.pathExtension
+        // Prefer the format’s full extension (e.g. tar.gz) over URL.pathExtension (gz only).
+        let ext: String
+        if hasExpectedExtension(finalURL, format: format) {
+            let name = finalURL.lastPathComponent
+            let expected = format.fileExtension
+            if expected.contains("."), name.lowercased().hasSuffix("." + expected.lowercased()) {
+                ext = expected
+            } else if !finalURL.pathExtension.isEmpty {
+                ext = finalURL.pathExtension
+            } else {
+                ext = expected
+            }
+        } else if finalURL.pathExtension.isEmpty {
+            ext = format.fileExtension
+        } else {
+            // User typed a name with a wrong/other extension; work file still uses format extension.
+            ext = format.fileExtension
+        }
         let temp = fileManager.temporaryDirectory
             .appendingPathComponent("ArchivePeek-\(UUID().uuidString).\(ext)")
         return CompressionDestination(workURL: temp, finalURL: finalURL, shouldRelocate: true)
     }
 
+    /// Commit a finished work archive to `finalURL` without risking the previous final file.
+    ///
+    /// Steps:
+    /// 1. Copy/move the system-temp work file to a unique **sibling** of the final path
+    ///    (`.ArchivePeek-<uuid>.partial` in the destination directory). `finalURL` is not touched.
+    /// 2. Optionally run `beforeCommit` on that sibling (e.g. integrity verify).
+    /// 3. Atomically replace `finalURL` with the sibling (`replaceItemAt` when a file already
+    ///    exists; plain move when creating a new name).
+    ///
+    /// If any step fails, only work/partial temps are cleaned; an existing final archive remains.
+    ///
+    /// - Parameter beforeCommit: Optional gate (verify) run on the staged sibling **before**
+    ///   the old final path is replaced.
     static func finalizeCompressionDestination(
         _ destination: CompressionDestination,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        beforeCommit: ((URL) throws -> Void)? = nil
     ) throws {
-        guard destination.shouldRelocate else { return }
-
-        let parent = destination.finalURL.deletingLastPathComponent()
-        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: destination.finalURL.path) {
-            try fileManager.removeItem(at: destination.finalURL)
-        }
-        do {
-            try fileManager.moveItem(at: destination.workURL, to: destination.finalURL)
-        } catch {
-            do {
-                if fileManager.fileExists(atPath: destination.finalURL.path) {
-                    try fileManager.removeItem(at: destination.finalURL)
-                }
-                try fileManager.copyItem(at: destination.workURL, to: destination.finalURL)
-                try fileManager.removeItem(at: destination.workURL)
-            } catch {
-                throw ArchiveError.commandFailed(
-                    "Could not save the archive to \(destination.finalURL.path): \(error.localizedDescription)"
-                )
+        guard destination.shouldRelocate else {
+            // Non-relocate paths are not used by current backends (always temp → final).
+            if let beforeCommit {
+                try beforeCommit(destination.workURL)
             }
+            return
+        }
+
+        let workURL = destination.workURL
+        let finalURL = destination.finalURL
+        guard fileManager.fileExists(atPath: workURL.path) else {
+            throw ArchiveError.commandFailed("Archive was not created.")
+        }
+
+        let parent = finalURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+
+        // Sibling keeps a real archive extension so tools/verify recognize the format
+        // (hidden name: .ArchivePeek-<uuid>.zip / .tar.gz / …).
+        let suffix = archiveFileSuffix(for: finalURL, workURL: workURL)
+        let partialURL = parent.appendingPathComponent(
+            ".ArchivePeek-\(UUID().uuidString).\(suffix)"
+        )
+
+        // Stage beside the final path. Never delete or open finalURL yet.
+        do {
+            do {
+                try fileManager.moveItem(at: workURL, to: partialURL)
+            } catch {
+                // Cross-volume move fails → copy then remove work.
+                try fileManager.copyItem(at: workURL, to: partialURL)
+                try? fileManager.removeItem(at: workURL)
+            }
+        } catch {
+            try? fileManager.removeItem(at: partialURL)
+            throw ArchiveError.commandFailed(
+                "Could not stage the archive next to \(finalURL.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
+
+        do {
+            if let beforeCommit {
+                try beforeCommit(partialURL)
+            }
+
+            if fileManager.fileExists(atPath: finalURL.path) {
+                // Same-directory atomic replacement: old final is only swapped out as part of
+                // a successful commit, not deleted first.
+                _ = try fileManager.replaceItemAt(
+                    finalURL,
+                    withItemAt: partialURL,
+                    backupItemName: nil,
+                    options: []
+                )
+                // replaceItemAt usually consumes the new item; clean leftover partial if any.
+                if fileManager.fileExists(atPath: partialURL.path) {
+                    try? fileManager.removeItem(at: partialURL)
+                }
+            } else {
+                try fileManager.moveItem(at: partialURL, to: finalURL)
+            }
+        } catch {
+            try? fileManager.removeItem(at: partialURL)
+            // If work was already moved into partial, nothing left at workURL.
+            try? fileManager.removeItem(at: workURL)
+            throw ArchiveError.commandFailed(
+                "Could not save the archive to \(finalURL.path): \(error.localizedDescription)"
+            )
         }
     }
 
@@ -437,10 +521,30 @@ enum CompressionSupport {
         _ destination: CompressionDestination,
         fileManager: FileManager = .default
     ) {
+        // Only the system-temp work file. Destination-directory siblings are cleaned
+        // by finalizeCompressionDestination on its own failure path (do not scan the folder —
+        // another concurrent compress might own a partial there).
         if destination.shouldRelocate,
            fileManager.fileExists(atPath: destination.workURL.path) {
             try? fileManager.removeItem(at: destination.workURL)
         }
+    }
+
+    /// File-name suffix for staging siblings (supports compound extensions like tar.gz).
+    private static func archiveFileSuffix(for finalURL: URL, workURL: URL) -> String {
+        let finalName = finalURL.lastPathComponent.lowercased()
+        for compound in ["tar.gz", "tar.bz2", "tar.xz", "tar.zst"] {
+            if finalName.hasSuffix(".\(compound)") { return compound }
+        }
+        if !finalURL.pathExtension.isEmpty {
+            return finalURL.pathExtension
+        }
+        let workName = workURL.lastPathComponent
+        if let dot = workName.firstIndex(of: ".") {
+            let after = String(workName[workName.index(after: dot)...])
+            if !after.isEmpty { return after }
+        }
+        return "archive"
     }
 
     static func removeStaleNestedArchives(
@@ -636,10 +740,12 @@ enum CompressionSupport {
     }
 
     private static func commonParentDirectory(for urls: [URL]) -> URL? {
-        guard let first = urls.first else { return nil }
+        // Resolve symlink roots first so /var vs /private/var share a true common parent.
+        let resolved = urls.map { $0.resolvingSymlinksInPath().standardizedFileURL }
+        guard let first = resolved.first else { return nil }
         var commonComponents = first.deletingLastPathComponent().pathComponents
 
-        for url in urls.dropFirst() {
+        for url in resolved.dropFirst() {
             let components = url.deletingLastPathComponent().pathComponents
             let limit = min(commonComponents.count, components.count)
             var shared = 0
@@ -655,14 +761,16 @@ enum CompressionSupport {
     }
 
     private static func relativePath(for url: URL, from directory: URL) -> String {
-        let directoryPath = directory.standardizedFileURL.path
-        let sourcePath = url.standardizedFileURL.path
+        // Resolve /var vs /private/var (and other symlink roots) so relative names stay correct.
+        let directoryPath = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        let sourcePath = url.resolvingSymlinksInPath().standardizedFileURL.path
 
-        if sourcePath.hasPrefix(directoryPath) {
-            var relative = String(sourcePath.dropFirst(directoryPath.count))
-            if relative.hasPrefix("/") {
-                relative = String(relative.dropFirst())
-            }
+        let directoryPrefix = directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/"
+        if sourcePath == directoryPath {
+            return url.lastPathComponent
+        }
+        if sourcePath.hasPrefix(directoryPrefix) {
+            let relative = String(sourcePath.dropFirst(directoryPrefix.count))
             if !relative.isEmpty {
                 return relative
             }

@@ -63,19 +63,21 @@ struct ArchiveEntryTableView: NSViewRepresentable {
         bindInteractionHandlers(to: tableView, coordinator: coordinator)
 
         let entryPaths = entries.map(\.path)
-        if coordinator.lastEntryPaths != entryPaths {
+        let contentChanged = coordinator.lastEntryPaths != entryPaths
+        if contentChanged {
             coordinator.lastEntryPaths = entryPaths
             tableView.reloadData()
+            // Focus only when the listed content changes (navigate / open archive),
+            // not on every SwiftUI refresh — that steals focus from other controls.
+            if !entries.isEmpty {
+                DispatchQueue.main.async {
+                    tableView.window?.makeFirstResponder(tableView)
+                }
+            }
         }
 
         if !coordinator.isUpdatingSelection {
             coordinator.syncSelectionToTable()
-        }
-
-        if !entries.isEmpty, tableView.window?.firstResponder !== tableView {
-            DispatchQueue.main.async {
-                tableView.window?.makeFirstResponder(tableView)
-            }
         }
     }
 
@@ -348,8 +350,10 @@ struct ArchiveEntryTableView: NSViewRepresentable {
         private static func waitForPreparedURL(
             entry: ArchiveEntry,
             provider: (ArchiveEntry) -> URL?,
-            timeout: TimeInterval = 3
+            timeout: TimeInterval = 0.35
         ) -> URL? {
+            // Brief wait only — pasteboardWriter runs on the main thread. Longer spins freeze the UI;
+            // fall through to NSFilePromiseProvider for slow extracts.
             if let url = provider(entry) {
                 return url
             }
@@ -358,7 +362,7 @@ struct ArchiveEntryTableView: NSViewRepresentable {
                 if let url = provider(entry) {
                     return url
                 }
-                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
             }
             return provider(entry)
         }

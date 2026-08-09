@@ -86,7 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openArchive(_ url: URL, in browser: ArchiveBrowserModel) {
         activateMainWindow()
-        browser.openArchive(url)
+        // Capture scope/bookmark immediately while the system open grant is valid.
+        let tokens = SecurityScopedAccess.captureTokens(for: [url.standardizedFileURL])
+        browser.openArchive(url.standardizedFileURL, accessTokens: tokens)
         // Finder "open with" can still spawn an extra WindowGroup; close only then.
         scheduleDuplicateWindowCleanup()
     }
@@ -219,7 +221,9 @@ struct ArchivePeekApp: App {
         panel.message = "Choose an archive to open."
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            browser.openArchive(url)
+            let standardized = url.standardizedFileURL
+            let tokens = SecurityScopedAccess.captureTokens(for: [standardized])
+            browser.openArchive(standardized, accessTokens: tokens)
         }
     }
 }

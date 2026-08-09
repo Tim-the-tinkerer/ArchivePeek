@@ -92,8 +92,8 @@ struct CompressSheet: View {
 
             Toggle(isOn: $browser.verifyAfterCompress) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Verify integrity after creation")
-                    Text("Tests the archive for corruption when compression finishes.")
+                    Text("Verify before replacing existing file")
+                    Text("Integrity-tests the new archive before replacing any file already at the destination. If verification fails, the previous archive is left intact.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

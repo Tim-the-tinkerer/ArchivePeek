@@ -60,9 +60,12 @@ enum ZipArchiveLister {
             guard nameEnd <= centralDirectory.count else { break }
 
             let nameData = centralDirectory[nameStart..<nameEnd]
-            guard let name = String(data: nameData, encoding: .utf8), !name.isEmpty else {
-                offset = nameEnd + extraFieldLength + commentLength
-                continue
+            // Prefer UTF-8 (general-purpose bit 11 / modern tools); fall back for legacy OEM/Latin names.
+            // Never silently drop members: Extract All validates only listed paths.
+            let name = decodeZipFileName(nameData, generalPurposeFlag: generalPurposeFlag)
+            guard let name, !name.isEmpty else {
+                // Undecodable / empty CD names — hand off to 7-Zip rather than under-report.
+                throw ArchiveError.zipRequiresSevenZip
             }
 
             if uncompressedSize == 0xFFFF_FFFF || compressedSize == 0xFFFF_FFFF {
@@ -81,7 +84,11 @@ enum ZipArchiveLister {
                 }
             }
 
-            let isDirectory = name.hasSuffix("/") || (externalAttributes & 0x10) != 0
+            // DOS dir bit (0x10) and Unix mode in high 16 bits (S_IFDIR = 0040000).
+            let unixMode = (externalAttributes >> 16) & 0o170000
+            let isDirectory = name.hasSuffix("/")
+                || (externalAttributes & 0x10) != 0
+                || unixMode == 0o040000
             entries.append(
                 ArchiveEntry(
                     path: isDirectory && !name.hasSuffix("/") ? name + "/" : name,
@@ -97,6 +104,13 @@ enum ZipArchiveLister {
 
         if hasEncryptedEntries {
             throw ArchiveError.passwordRequired
+        }
+
+        // If the central directory claims more records than we could parse cleanly, prefer 7-Zip
+        // so Extract All path validation is not based on an incomplete list.
+        let expected = min(entryCount, maxEntries)
+        if entryCount > 0, entries.count < expected {
+            throw ArchiveError.zipRequiresSevenZip
         }
 
         return entries
@@ -148,6 +162,32 @@ enum ZipArchiveLister {
             offset = dataEnd
         }
         return nil
+    }
+
+    private static func decodeZipFileName(_ data: Data, generalPurposeFlag: UInt16) -> String? {
+        guard !data.isEmpty else { return nil }
+        // Bit 11 = language encoding flag (UTF-8).
+        if (generalPurposeFlag & 0x0800) != 0 {
+            if let utf8 = String(data: data, encoding: .utf8), !utf8.isEmpty {
+                return utf8
+            }
+        }
+        if let utf8 = String(data: data, encoding: .utf8), !utf8.isEmpty {
+            return utf8
+        }
+        // Common legacy code pages for non-UTF-8 ZIP names.
+        if let latin1 = String(data: data, encoding: .isoLatin1), !latin1.isEmpty {
+            return latin1
+        }
+        if let macRoman = String(data: data, encoding: .macOSRoman), !macRoman.isEmpty {
+            return macRoman
+        }
+        if let ascii = String(data: data, encoding: .ascii), !ascii.isEmpty {
+            return ascii
+        }
+        // Lossy UTF-8 so we still surface a path for validation rather than dropping the member.
+        let lossy = String(decoding: data, as: UTF8.self)
+        return lossy.isEmpty ? nil : lossy
     }
 
     private static func readExactly(from handle: FileHandle, count: Int) throws -> Data {

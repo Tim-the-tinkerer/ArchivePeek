@@ -34,7 +34,7 @@ struct SettingsView: View {
                     Text("Maximum").tag(9)
                 }
 
-                Toggle("Verify integrity after creation", isOn: $verifyAfterCompress)
+                Toggle("Verify before replacing existing file", isOn: $verifyAfterCompress)
 
                 if compressFormat.wrappedValue.supportsSolidArchive {
                     Toggle("Solid archive (7z)", isOn: $solidArchive)
@@ -46,7 +46,7 @@ struct SettingsView: View {
             } header: {
                 Text("Compression")
             } footer: {
-                Text("These defaults apply whenever you open the Compress sheet. DMG app installer layout is used when compressing .app bundles to DMG.")
+                Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. DMG app installer layout is used when compressing .app bundles to DMG.")
             }
 
             Section {

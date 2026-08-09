@@ -5,6 +5,7 @@ enum DittoCompressBackend {
         sources: [URL],
         to archive: URL,
         handle: ProcessRunner.Handle? = nil,
+        beforeCommit: ((URL) throws -> Void)? = nil,
         onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
     ) throws {
         guard let ditto = ToolLocator.dittoPath else {
@@ -22,8 +23,14 @@ enum DittoCompressBackend {
 
         // Stage in-process first so security-scoped / external-volume project trees
         // (including .git and other hidden files) are fully readable by ditto.
-        let staged = try CompressionSupport.stageForSevenZip(sources, onProgress: onProgress)
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+        let staged = try CompressionSupport.stageForSevenZip(
+            sources,
+            onProgress: onProgress,
+            isCancelled: { handle?.wasCancelled == true }
+        )
         defer { staged.cleanup() }
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
         guard staged.urls.count == 1 else {
             throw ArchiveError.invalidSelection
         }
@@ -40,6 +47,12 @@ enum DittoCompressBackend {
             sources: sources,
             format: .zip
         )
+        var didFinalize = false
+        defer {
+            if !didFinalize {
+                CompressionSupport.cleanupCompressionDestination(destination)
+            }
+        }
         try CompressionSupport.removeStaleNestedArchives(archive: destination.finalURL, sources: sources)
         try FileManager.default.createDirectory(
             at: destination.workURL.deletingLastPathComponent(),
@@ -56,6 +69,8 @@ enum DittoCompressBackend {
         arguments.append(source.path)
         arguments.append(destination.workURL.path)
 
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+
         let result = try ProcessRunner.runMonitored(
             executable: ditto,
             arguments: arguments,
@@ -71,8 +86,10 @@ enum DittoCompressBackend {
             throw ArchiveError.commandFailed(message.isEmpty ? "ditto compression failed" : message)
         }
 
-        try CompressionSupport.finalizeCompressionDestination(destination)
-        try CompressionSupport.stripMacJunkFromZip(at: destination.finalURL)
+        try CompressionSupport.stripMacJunkFromZip(at: destination.workURL)
+        onProgress?(CompressionProgressUpdate(fraction: 0.98, message: "Saving archive…", indeterminate: true))
+        try CompressionSupport.finalizeCompressionDestination(destination, beforeCommit: beforeCommit)
+        didFinalize = true
 
         onProgress?(CompressionProgressUpdate(fraction: 1.0, message: "Finishing…", indeterminate: false))
 

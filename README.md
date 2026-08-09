@@ -2,7 +2,7 @@
 
 A native macOS app for browsing archive contents without extracting everything first, and for creating new archives quickly.
 
-**Version 1.0.10** · macOS 13.0 or later
+**Version 1.0.22** · macOS 13.0 or later
 
 ## Features
 
@@ -52,7 +52,7 @@ Toolbar buttons are icon-only — hover any icon to see its name.
 Open **ArchivePeek → Settings…** (⌘,) to set defaults applied whenever you open the Compress sheet:
 
 - Default archive format and compression level
-- Verify integrity after creation (on/off)
+- Verify before replacing an existing destination file (on/off)
 - Solid 7z archive (on/off)
 - DMG app installer layout (on/off)
 
@@ -67,7 +67,7 @@ Use **Set ArchivePeek as Default for Archives** to register ArchivePeek as the s
 - Prefer archiving the **project folder** as a single item rather than multi-selecting files (multi-select only includes what you pick).
 - **ZIP or 7z with a password** uses 7-Zip and encrypts archive contents.
 - **7z solid archives** improve compression for many similar files but are slower to create and to extract individual files from.
-- **Verify integrity after creation** runs a full test when compression finishes (enabled by default).
+- **Verify before replacing** integrity-tests the new archive before replacing any file already at the destination (enabled by default).
 - Save new archives **outside** the folder being compressed (for example, on Desktop) to avoid nesting the archive inside itself.
 - Add all items in **one** Add Files step or drag to minimize folder permission prompts.
 - Only Mac metadata (`.DS_Store`, `._*`, `__MACOSX`) is excluded automatically — not project source files.

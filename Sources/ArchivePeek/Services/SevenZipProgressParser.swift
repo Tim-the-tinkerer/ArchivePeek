@@ -126,10 +126,8 @@ final class SevenZipProgressParser: @unchecked Sendable {
             return value
         }
 
-        let digitsOnly = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let value = Int(digitsOnly), value <= 100 {
-            return value
-        }
+        // Only treat bare numbers as percents when the line is exactly digits (7-Zip sometimes
+        // prints "  42%" already handled above). Avoid treating file names like "100" as progress.
         return nil
     }
 }

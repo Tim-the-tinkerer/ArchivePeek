@@ -8,6 +8,7 @@ enum DmgCompressBackend {
         password: String? = nil,
         appInstallerLayout: Bool = false,
         handle: ProcessRunner.Handle? = nil,
+        beforeCommit: ((URL) throws -> Void)? = nil,
         onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
     ) throws {
         guard let hdiutil = ToolLocator.hdiutilPath else {
@@ -20,11 +21,19 @@ enum DmgCompressBackend {
             indeterminate: true
         ))
 
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+
         let destination = CompressionSupport.compressionDestination(
             archive: archive,
             sources: sources,
             format: .dmg
         )
+        var didFinalize = false
+        defer {
+            if !didFinalize {
+                CompressionSupport.cleanupCompressionDestination(destination)
+            }
+        }
         try CompressionSupport.removeStaleNestedArchives(archive: destination.finalURL, sources: sources)
         try FileManager.default.createDirectory(
             at: destination.workURL.deletingLastPathComponent(),
@@ -35,12 +44,23 @@ enum DmgCompressBackend {
             throw ArchiveError.invalidSelection
         }
 
-        let staged = try stageSources(sources, appInstallerLayout: appInstallerLayout)
+        // Multi-source staging uses lastPathComponent — reject collisions before overwrite.
+        if sources.count > 1 || appInstallerLayout {
+            try CompressionSupport.validateUniqueStagingBasenames(sources)
+        }
+
+        let staged = try stageSources(
+            sources,
+            appInstallerLayout: appInstallerLayout,
+            isCancelled: { handle?.wasCancelled == true }
+        )
         defer {
             if staged.shouldCleanup {
                 try? FileManager.default.removeItem(at: staged.folder)
             }
         }
+
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
         let level = min(max(compressionLevel, 0), 9)
         let outputBase = hdiutilOutputBase(for: destination.workURL)
@@ -85,7 +105,9 @@ enum DmgCompressBackend {
             throw ArchiveError.commandFailed(message.isEmpty ? "hdiutil compression failed" : message)
         }
 
-        try CompressionSupport.finalizeCompressionDestination(destination)
+        onProgress?(CompressionProgressUpdate(fraction: 0.98, message: "Saving archive…", indeterminate: true))
+        try CompressionSupport.finalizeCompressionDestination(destination, beforeCommit: beforeCommit)
+        didFinalize = true
 
         onProgress?(CompressionProgressUpdate(fraction: 1.0, message: "Finishing…", indeterminate: false))
 
@@ -94,7 +116,11 @@ enum DmgCompressBackend {
         }
     }
 
-    static func verify(at url: URL, password: String?) throws -> String {
+    static func verify(
+        at url: URL,
+        password: String?,
+        handle: ProcessRunner.Handle? = nil
+    ) throws -> String {
         guard let hdiutil = ToolLocator.hdiutilPath else {
             throw ArchiveError.toolUnavailable("hdiutil")
         }
@@ -112,8 +138,10 @@ enum DmgCompressBackend {
         let result = try ProcessRunner.run(
             executable: hdiutil,
             arguments: arguments,
-            stdin: stdin
+            stdin: stdin,
+            handle: handle
         )
+        if result.wasCancelled { throw ArchiveError.cancelled }
 
         guard result.exitCode == 0 else {
             let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -134,31 +162,32 @@ enum DmgCompressBackend {
 
     private static func stageSources(
         _ sources: [URL],
-        appInstallerLayout: Bool
+        appInstallerLayout: Bool,
+        isCancelled: (() -> Bool)? = nil
     ) throws -> StagedSources {
         let standardized = sources.map { $0.standardizedFileURL }
         guard !standardized.isEmpty else {
             throw ArchiveError.invalidSelection
         }
 
-        if appInstallerLayout {
-            let staging = try makeStagingDirectory()
-            for source in standardized {
-                let destination = staging.appendingPathComponent(source.lastPathComponent)
-                try copyItem(from: source, to: destination)
-            }
-            try addApplicationsShortcut(to: staging)
-            return StagedSources(folder: staging, shouldCleanup: true)
-        }
+        if isCancelled?() == true { throw ArchiveError.cancelled }
 
-        if standardized.count == 1 {
-            return StagedSources(folder: standardized[0], shouldCleanup: false)
-        }
-
+        // hdiutil -srcfolder requires a directory. Always stage into a folder so:
+        // • single files become a valid disk image payload
+        // • multi-source and app-installer layouts share the same prepare path
+        // • cancel can clean a dedicated staging tree
         let staging = try makeStagingDirectory()
         for source in standardized {
+            if isCancelled?() == true {
+                try? FileManager.default.removeItem(at: staging)
+                throw ArchiveError.cancelled
+            }
             let destination = staging.appendingPathComponent(source.lastPathComponent)
             try copyItem(from: source, to: destination)
+        }
+
+        if appInstallerLayout {
+            try addApplicationsShortcut(to: staging)
         }
 
         return StagedSources(folder: staging, shouldCleanup: true)
@@ -174,7 +203,10 @@ enum DmgCompressBackend {
     private static func addApplicationsShortcut(to folder: URL) throws {
         let applicationsLink = folder.appendingPathComponent("Applications")
         if FileManager.default.fileExists(atPath: applicationsLink.path) {
-            try FileManager.default.removeItem(at: applicationsLink)
+            // Never silently delete a real staged item named Applications.
+            throw ArchiveError.commandFailed(
+                "App installer layout needs a free top-level name \"Applications\" for the Applications folder shortcut. Rename or remove that item from the selection, then try again."
+            )
         }
         try FileManager.default.createSymbolicLink(
             at: applicationsLink,

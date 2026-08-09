@@ -6,6 +6,9 @@ enum SecurityScopedAccess {
         private let bookmark: Data?
         private let lock = NSLock()
         private var accessCount = 0
+        /// The exact URL instance passed to `startAccessingSecurityScopedResource`.
+        /// Must be the same object used for `stopAccessingSecurityScopedResource`.
+        private var scopedURL: URL?
 
         init(url: URL, bookmark: Data?) {
             self.url = url.standardizedFileURL
@@ -34,7 +37,17 @@ enum SecurityScopedAccess {
                 accessCount += 1
                 return true
             }
-            if resolvedURL().startAccessingSecurityScopedResource() {
+
+            let resolved = resolvedURL()
+            if resolved.startAccessingSecurityScopedResource() {
+                scopedURL = resolved
+                accessCount = 1
+                return true
+            }
+
+            // Bookmark resolution can differ from the original panel URL; try original once.
+            if resolved.path != url.path, url.startAccessingSecurityScopedResource() {
+                scopedURL = url
                 accessCount = 1
                 return true
             }
@@ -47,7 +60,21 @@ enum SecurityScopedAccess {
             guard accessCount > 0 else { return }
             accessCount -= 1
             if accessCount == 0 {
-                resolvedURL().stopAccessingSecurityScopedResource()
+                scopedURL?.stopAccessingSecurityScopedResource()
+                scopedURL = nil
+            }
+        }
+
+        /// Drop every nested begin, always pairing stop with the started URL.
+        func endAllAccess() {
+            lock.lock()
+            let shouldStop = accessCount > 0
+            accessCount = 0
+            let active = scopedURL
+            scopedURL = nil
+            lock.unlock()
+            if shouldStop {
+                active?.stopAccessingSecurityScopedResource()
             }
         }
     }
@@ -111,24 +138,40 @@ enum SecurityScopedAccess {
         let fileManager = FileManager.default
         for url in urls {
             var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+            let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) || isSymlink
+            guard exists else {
                 throw ArchiveError.entryNotFound(url.lastPathComponent)
             }
-            if !fileManager.isReadableFile(atPath: url.path) {
+            // isReadableFile is flaky for directories on some volumes; accept search (x) bit too.
+            if isDirectory.boolValue {
+                let readable = fileManager.isReadableFile(atPath: url.path)
+                    || fileManager.isExecutableFile(atPath: url.path)
+                if !readable {
+                    throw ArchiveError.permissionDenied(url.lastPathComponent)
+                }
+            } else if isSymlink {
+                // Link text is enough for staging; do not require the target to be readable.
+                continue
+            } else if !fileManager.isReadableFile(atPath: url.path) {
                 throw ArchiveError.permissionDenied(url.lastPathComponent)
             }
         }
     }
 
     static func releaseAll(_ tokens: inout [Token]) {
-        deactivate(tokens)
+        for token in tokens {
+            token.endAllAccess()
+        }
         tokens.removeAll()
     }
 
     static func removeToken(for url: URL, from tokens: inout [Token]) {
         let standardized = url.standardizedFileURL
         let matching = tokens.filter { $0.url == standardized }
-        deactivate(matching)
+        for token in matching {
+            token.endAllAccess()
+        }
         tokens.removeAll { $0.url == standardized }
     }
 

@@ -10,12 +10,22 @@ enum TarBackend {
             || isCompressedTar(url)
     }
 
-    static func list(at url: URL, maxEntries: Int) throws -> [ArchiveEntry] {
+    static func list(
+        at url: URL,
+        maxEntries: Int,
+        handle: ProcessRunner.Handle? = nil
+    ) throws -> [ArchiveEntry] {
         guard let bsdtar = ToolLocator.bsdtarPath else {
             throw ArchiveError.toolUnavailable("bsdtar")
         }
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
-        let result = try ProcessRunner.run(executable: bsdtar, arguments: ["-tvf", url.path])
+        let result = try ProcessRunner.run(
+            executable: bsdtar,
+            arguments: ["-tvf", url.path],
+            handle: handle
+        )
+        if result.wasCancelled { throw ArchiveError.cancelled }
         guard result.exitCode == 0 else {
             let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
             throw ArchiveError.commandFailed(message.isEmpty ? "bsdtar listing failed" : message)
@@ -35,7 +45,8 @@ enum TarBackend {
         entries: [ArchiveEntry],
         from archive: URL,
         to destination: URL,
-        preservePaths: Bool = true
+        preservePaths: Bool = true,
+        handle: ProcessRunner.Handle? = nil
     ) throws {
         guard let bsdtar = ToolLocator.bsdtarPath else {
             throw ArchiveError.toolUnavailable("bsdtar")
@@ -45,6 +56,7 @@ enum TarBackend {
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
         for entry in entries where !entry.isDirectory {
+            if handle?.wasCancelled == true { throw ArchiveError.cancelled }
             var arguments = ["-xvf", archive.path, "-C", destination.path]
             if !preservePaths {
                 let stripCount = entry.normalizedPath.split(separator: "/").count - 1
@@ -56,8 +68,10 @@ enum TarBackend {
 
             let result = try ProcessRunner.run(
                 executable: bsdtar,
-                arguments: arguments
+                arguments: arguments,
+                handle: handle
             )
+            if result.wasCancelled { throw ArchiveError.cancelled }
             guard result.exitCode == 0 else {
                 let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
                 throw ArchiveError.commandFailed(message.isEmpty ? "bsdtar extraction failed" : message)
@@ -65,7 +79,11 @@ enum TarBackend {
         }
     }
 
-    static func extractAll(from archive: URL, to destination: URL) throws {
+    static func extractAll(
+        from archive: URL,
+        to destination: URL,
+        handle: ProcessRunner.Handle? = nil
+    ) throws {
         guard let bsdtar = ToolLocator.bsdtarPath else {
             throw ArchiveError.toolUnavailable("bsdtar")
         }
@@ -73,19 +91,27 @@ enum TarBackend {
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let result = try ProcessRunner.run(
             executable: bsdtar,
-            arguments: ["-xvf", archive.path, "-C", destination.path]
+            arguments: ["-xvf", archive.path, "-C", destination.path],
+            handle: handle
         )
+        if result.wasCancelled { throw ArchiveError.cancelled }
         guard result.exitCode == 0 else {
             let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
             throw ArchiveError.commandFailed(message.isEmpty ? "bsdtar extraction failed" : message)
         }
     }
 
-    static func extractFolder(entry: ArchiveEntry, from archive: URL, to destination: URL) throws {
+    static func extractFolder(
+        entry: ArchiveEntry,
+        from archive: URL,
+        to destination: URL,
+        handle: ProcessRunner.Handle? = nil
+    ) throws {
         guard let bsdtar = ToolLocator.bsdtarPath else {
             throw ArchiveError.toolUnavailable("bsdtar")
         }
 
+        try PathSafety.validateArchiveEntryPath(entry.path)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
         let prefix = entry.normalizedPath
@@ -95,20 +121,26 @@ enum TarBackend {
 
         let result = try ProcessRunner.run(
             executable: bsdtar,
-            arguments: ["-xvf", archive.path, "-C", destination.path, prefix]
+            arguments: ["-xvf", archive.path, "-C", destination.path, prefix],
+            handle: handle
         )
+        if result.wasCancelled { throw ArchiveError.cancelled }
         guard result.exitCode == 0 else {
             let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
             throw ArchiveError.commandFailed(message.isEmpty ? "bsdtar folder extraction failed" : message)
         }
     }
 
-    static func extractToTemp(entry: ArchiveEntry, from archive: URL) throws -> URL {
+    static func extractToTemp(
+        entry: ArchiveEntry,
+        from archive: URL,
+        handle: ProcessRunner.Handle? = nil
+    ) throws -> URL {
         let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("ArchivePeek-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
         TempFileRegistry.registerExtractRoot(tempRoot)
-        try extract(entries: [entry], from: archive, to: tempRoot, preservePaths: true)
+        try extract(entries: [entry], from: archive, to: tempRoot, preservePaths: true, handle: handle)
 
         let extracted = try PathSafety.resolvedURL(forEntryPath: entry.normalizedPath, in: tempRoot)
         guard FileManager.default.fileExists(atPath: extracted.path) else {
@@ -139,6 +171,21 @@ enum TarBackend {
         guard !path.isEmpty else { return nil }
 
         let typeFlag = line.first
+        // bsdtar prints symlinks as: "name -> target" in the path field.
+        if typeFlag == "l" || path.contains(" -> ") {
+            if let arrow = path.range(of: " -> ") {
+                path = String(path[..<arrow.lowerBound]).trimmingCharacters(in: .whitespaces)
+            }
+            guard !path.isEmpty else { return nil }
+            return ArchiveEntry(
+                path: path,
+                isDirectory: false,
+                uncompressedSize: 0,
+                compressedSize: nil,
+                modified: modified
+            )
+        }
+
         let isDir = path.hasSuffix("/") || typeFlag == "d"
         if isDir && !path.hasSuffix("/") {
             path += "/"

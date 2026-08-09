@@ -40,4 +40,26 @@ enum CompressDiagnostics {
         }
         fputs(line, stderr)
     }
+
+    /// Join process arguments for diagnostics, redacting secrets (7-Zip `-pPASSWORD`, etc.).
+    static func redactedArgumentList(_ arguments: [String]) -> String {
+        arguments.map(redactArgument).joined(separator: " ")
+    }
+
+    /// Never write encryption passwords into compress.log.
+    static func redactArgument(_ argument: String) -> String {
+        // 7-Zip / zip style: -pSECRET (password immediately after -p).
+        // Keep the deliberate empty-password sentinel `-p-` readable in logs.
+        if argument.hasPrefix("-p"), argument.count > 2, argument != "-p-" {
+            return "-p***"
+        }
+        // hdiutil stdin is not in argv; still catch long password-looking flags.
+        if argument.hasPrefix("--password="), argument.count > "--password=".count {
+            return "--password=***"
+        }
+        if argument.hasPrefix("-password="), argument.count > "-password=".count {
+            return "-password=***"
+        }
+        return argument
+    }
 }

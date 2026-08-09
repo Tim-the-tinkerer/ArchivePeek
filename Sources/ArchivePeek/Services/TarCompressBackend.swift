@@ -6,6 +6,7 @@ enum TarCompressBackend {
         to archive: URL,
         format: CompressFormat,
         handle: ProcessRunner.Handle? = nil,
+        beforeCommit: ((URL) throws -> Void)? = nil,
         onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
     ) throws {
         guard let bsdtar = ToolLocator.bsdtarPath else {
@@ -17,6 +18,24 @@ enum TarCompressBackend {
 
         onProgress?(CompressionProgressUpdate(
             fraction: 0,
+            message: "Preparing files…",
+            indeterminate: true
+        ))
+
+        // Stage in-process first (same as ZIP/7z) so security-scoped / external-volume
+        // sources are fully readable and project files stay complete.
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+        let staged = try CompressionSupport.stageForSevenZip(
+            sources,
+            onProgress: onProgress,
+            isCancelled: { handle?.wasCancelled == true }
+        )
+        defer { staged.cleanup() }
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+        let workSources = staged.urls
+
+        onProgress?(CompressionProgressUpdate(
+            fraction: 0.05,
             message: "Compressing…",
             indeterminate: true
         ))
@@ -26,9 +45,15 @@ enum TarCompressBackend {
             sources: sources,
             format: format
         )
+        var didFinalize = false
+        defer {
+            if !didFinalize {
+                CompressionSupport.cleanupCompressionDestination(destination)
+            }
+        }
         try CompressionSupport.removeStaleNestedArchives(archive: destination.finalURL, sources: sources)
 
-        let context = try CompressionSupport.zipContext(for: sources)
+        let context = try CompressionSupport.zipContext(for: workSources)
         try FileManager.default.createDirectory(
             at: destination.workURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -46,6 +71,8 @@ enum TarCompressBackend {
         arguments.append("-C")
         arguments.append(context.workingDirectory.path)
         arguments.append(contentsOf: context.itemNames)
+
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
         let parser = TarProgressParser()
         let result = try ProcessRunner.runMonitored(
@@ -68,7 +95,9 @@ enum TarCompressBackend {
             throw ArchiveError.commandFailed(message.isEmpty ? "bsdtar compression failed" : message)
         }
 
-        try CompressionSupport.finalizeCompressionDestination(destination)
+        onProgress?(CompressionProgressUpdate(fraction: 0.98, message: "Saving archive…", indeterminate: true))
+        try CompressionSupport.finalizeCompressionDestination(destination, beforeCommit: beforeCommit)
+        didFinalize = true
 
         onProgress?(CompressionProgressUpdate(fraction: 1.0, message: "Finishing…", indeterminate: false))
 
