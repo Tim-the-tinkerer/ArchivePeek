@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
+# shellcheck source=select-xcode-toolchain.sh
+source "./select-xcode-toolchain.sh"
 
 LAUNCH=true
 CLEAN=false

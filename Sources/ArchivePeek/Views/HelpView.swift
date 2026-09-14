@@ -15,7 +15,7 @@ struct HelpView: View {
                         helpBullet("Open an archive with **Open** (⌘O), by double-clicking in Finder, or by dragging it onto the window.")
                         helpBullet("If ArchivePeek is already open, double-clicking an archive reuses the existing window.")
                         helpBullet("Use **Close Archive** (⇧⌘W) to return to the welcome screen.")
-                        helpBullet("Drop files or folders onto the window to add them to a new archive.")
+                        helpBullet("Drop files or folders onto the window to add them to a new archive, or onto an open ZIP/7z/TAR archive to add them there.")
                         helpBullet("Double-click folders to navigate; double-click files to open them.")
                     }
 
@@ -23,23 +23,35 @@ struct HelpView: View {
                         helpBullet("Use the breadcrumb bar to jump between folders inside the archive.")
                         helpBullet("Click to select files; Shift-click to select multiple items.")
                         helpBullet("Press Return to open the selected item, or **Space** to Quick Look.")
-                        helpBullet("Right-click for Open, Quick Look, or Extract.")
+                        helpBullet("Right-click for Open, Quick Look, Extract, or Remove from Archive.")
                         helpBullet("Drag files out of the list to extract them to Finder.")
+                        helpBullet("Press **Delete** to remove selected items from a ZIP, 7z, or TAR archive.")
                     }
 
                     helpSection("Toolbar", icon: "menubar.rectangle") {
                         helpText("Toolbar buttons show icons only — hover any icon to see its name.")
                         helpBullet("**Open** and **Compress** are always available.")
                         helpBullet("**Close Archive** returns to the welcome screen when browsing an archive.")
-                        helpBullet("The **Extract** menu contains Extract Selected and Extract All.")
+                        helpBullet("The **Extract** menu contains Extract Selected, Extract All, and Extract All to Folder.")
+                        helpBullet("**Add Files** and **Remove** edit ZIP, 7z, and uncompressed TAR archives.")
                         helpBullet("The open archive name appears in the status bar at the bottom of the window.")
                     }
 
                     helpSection("Extracting", icon: "square.and.arrow.down") {
-                        helpBullet("Use the **Extract** menu for Extract Selected or Extract All.")
+                        helpBullet("Use the **Extract** menu for Extract Selected, Extract All, or Extract All to Folder.")
                         helpBullet("**Extract Selected** saves chosen files to a folder you pick.")
+                        helpBullet("**Extract All** unpacks everything into the folder you choose.")
+                        helpBullet("**Extract All to Folder** creates a folder named after the archive inside the location you choose, then unpacks into that folder.")
                         helpBullet("Individual file extraction is flat (no folder structure recreated).")
                         helpBullet("**Quick Look** (eye icon) previews a selected file without saving it permanently.")
+                    }
+
+                    helpSection("Editing Archives", icon: "pencil") {
+                        helpBullet("ZIP (including CBZ), 7z, and uncompressed TAR archives can be edited while open.")
+                        helpBullet("**Add Files** (plus icon) or drop files/folders onto the window to add them to the current folder.")
+                        helpBullet("**Remove** (trash icon), right-click **Remove from Archive**, or press **Delete** to remove selected items.")
+                        helpBullet("Changes copy the archive, apply the edit, verify it, then replace the original only if that succeeds.")
+                        helpBullet("RAR, DMG, ISO, compressed TAR (`.tar.gz` and similar), and single-file GZIP/BZIP2/XZ archives cannot be modified — extract and create a new archive instead.")
                     }
 
                     helpSection("Compressing", icon: "doc.zipper") {
@@ -81,7 +93,8 @@ struct HelpView: View {
 
                     helpSection("Drag & Drop", icon: "arrow.down.doc") {
                         helpBullet("Drop archives onto the window to open them.")
-                        helpBullet("Drop files or folders to add them to the compress list.")
+                        helpBullet("With no archive open, drop files or folders to add them to the compress list.")
+                        helpBullet("With a ZIP, 7z, or TAR archive open, drop files or folders to add them to the current folder.")
                         helpBullet("Drag files from the archive list to Finder to extract them.")
                     }
 
@@ -92,6 +105,7 @@ struct HelpView: View {
                         shortcutRow("⌘,", "Settings")
                         shortcutRow("⌘?", "ArchivePeek Help")
                         shortcutRow("Return", "Open selected item")
+                        shortcutRow("Delete", "Remove selected items from the archive")
                     }
 
                     helpSection("Tools", icon: "wrench.and.screwdriver") {

@@ -33,11 +33,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var browser: ArchiveBrowserModel?
     private weak var mainWindow: NSWindow?
     private var pendingOpenURL: URL?
+    private var mainWindowCloseObserver: NSObjectProtocol?
+    private var isReadyToQuitOnWindowClose = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keep Launch Services UTI bindings (e.g. com.archivepeek.cbz) current so
         // document icons do not stick on an older ArchivePeek.app registration.
         DefaultAppRegistration.registerBundleWithLaunchServices()
+        DispatchQueue.main.async { [weak self] in
+            self?.isReadyToQuitOnWindowClose = true
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 
     func setBrowser(_ browser: ArchiveBrowserModel) {
@@ -52,9 +61,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func registerMainWindow(_ window: NSWindow) {
         if mainWindow == nil {
             mainWindow = window
+            observeMainWindowClose(window)
         }
         refreshWindowDropHandling()
         WindowDropInstaller.install(on: window)
+    }
+
+    private func observeMainWindowClose(_ window: NSWindow) {
+        if let mainWindowCloseObserver {
+            NotificationCenter.default.removeObserver(mainWindowCloseObserver)
+        }
+        // WindowGroup often hides rather than destroys the last window, so
+        // applicationShouldTerminateAfterLastWindowClosed may never fire.
+        mainWindowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.quitIfMainWindowClosed()
+            }
+        }
+    }
+
+    private func quitIfMainWindowClosed() {
+        guard isReadyToQuitOnWindowClose else { return }
+        NSApp.terminate(nil)
     }
 
     private func refreshWindowDropHandling() {

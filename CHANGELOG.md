@@ -2,6 +2,27 @@
 
 All notable changes to ArchivePeek are documented in this file.
 
+## [1.0.28] — 2026-09-14
+
+### Added
+- **Extract All to Folder** — unpacks the open archive into a new folder named after the archive, inside a location you choose (if that name exists, ArchivePeek uses `Name 2`, `Name 3`, …).
+- **Add files to an open archive** — plus-icon **Add Files**, or drop files and folders onto the window while browsing. Items go into the current folder. ZIP (including CBZ), 7z, and uncompressed TAR only.
+- **Remove files from an open archive** — trash-icon **Remove**, right-click **Remove from Archive**, or Delete. Confirms first. The original archive is replaced only after the change is written and verified.
+
+### Changed
+- **Red close button quits** — closing the main window (red traffic light or ⌘W) now quits ArchivePeek instead of leaving it running in the Dock. **Close Archive** (⇧⌘W) still returns to the welcome screen.
+
+### Fixed
+- **Build ArchivePeek.command uses Xcode** — the builder now prefers `/Applications/Xcode.app` instead of Command Line Tools, which cannot compile SwiftUI `@State` macros.
+
+### Notes
+- RAR, DMG, ISO, compressed TAR (`.tar.gz` and similar), and single-file GZIP/BZIP2/XZ archives cannot be edited; extract and create a new archive instead.
+
+## [1.0.27] — 2026-08-09
+
+### Fixed
+- **ZIP/7z blocked by DMG app-installer setting** — if “DMG app installer layout” was on as a default, Create Archive failed for ZIP, 7z, and other non-DMG formats (especially project folders that contain a nested `.app`). Installer layout is now applied only when the format is DMG; nested `.app` bundles inside a project folder are archived normally for ZIP/7z.
+
 ## [1.0.26] — 2026-08-09
 
 ### Added

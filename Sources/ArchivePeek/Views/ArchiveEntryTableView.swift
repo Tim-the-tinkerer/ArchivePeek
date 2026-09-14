@@ -12,6 +12,9 @@ struct ArchiveEntryTableView: NSViewRepresentable {
     let onOpenSelected: () -> Void
     let onExtractSelected: () -> Void
     let onQuickLookSelected: () -> Void
+    let onRemoveEntry: (ArchiveEntry) -> Void
+    let onRemoveSelected: () -> Void
+    let canRemoveFromArchive: Bool
     let onPrepareDragOut: (ArchiveEntry) -> Void
     let preparedDragURL: (ArchiveEntry) -> URL?
     let writeDraggedEntry: (ArchiveEntry, URL, @escaping (Error?) -> Void) -> Void
@@ -87,6 +90,10 @@ struct ArchiveEntryTableView: NSViewRepresentable {
         }
         tableView.onSpacePreview = { [weak coordinator] in
             coordinator?.handleSpacePreview()
+        }
+        tableView.onDelete = { [weak coordinator] in
+            guard let coordinator, coordinator.parent.canRemoveFromArchive else { return }
+            coordinator.parent.onRemoveSelected()
         }
     }
 
@@ -390,6 +397,12 @@ struct ArchiveEntryTableView: NSViewRepresentable {
                 extractItem.target = self
                 extractItem.representedObject = entry
             }
+            if parent.canRemoveFromArchive {
+                menu.addItem(.separator())
+                let removeItem = menu.addItem(withTitle: "Remove from Archive", action: #selector(removeRow(_:)), keyEquivalent: "")
+                removeItem.target = self
+                removeItem.representedObject = entry
+            }
             return menu
         }
 
@@ -401,6 +414,11 @@ struct ArchiveEntryTableView: NSViewRepresentable {
             extractItem.target = self
             let previewItem = menu.addItem(withTitle: "Quick Look", action: #selector(quickLookSelected(_:)), keyEquivalent: "")
             previewItem.target = self
+            if parent.canRemoveFromArchive {
+                menu.addItem(.separator())
+                let removeItem = menu.addItem(withTitle: "Remove from Archive", action: #selector(removeSelected(_:)), keyEquivalent: "")
+                removeItem.target = self
+            }
             return menu
         }
 
@@ -429,6 +447,15 @@ struct ArchiveEntryTableView: NSViewRepresentable {
 
         @objc private func quickLookSelected(_ sender: NSMenuItem) {
             parent.onQuickLookSelected()
+        }
+
+        @objc private func removeRow(_ sender: NSMenuItem) {
+            guard let entry = sender.representedObject as? ArchiveEntry else { return }
+            parent.onRemoveEntry(entry)
+        }
+
+        @objc private func removeSelected(_ sender: NSMenuItem) {
+            parent.onRemoveSelected()
         }
 
         func handleSpacePreview() {
@@ -469,11 +496,16 @@ private final class ArchiveTableCellView: NSTableCellView {
 private final class EntryTableView: NSTableView {
     var onReturn: (() -> Void)?
     var onSpacePreview: (() -> Void)?
+    var onDelete: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
         if handlePreviewShortcut(event) { return }
         if event.keyCode == 36 || event.keyCode == 76 {
             onReturn?()
+            return
+        }
+        if event.keyCode == 51 || event.keyCode == 117 {
+            onDelete?()
             return
         }
         super.keyDown(with: event)

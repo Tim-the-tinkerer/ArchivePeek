@@ -140,6 +140,270 @@ enum SevenZipBackend {
         }
     }
 
+    /// Add files/folders into an existing archive via a work copy, then atomically replace.
+    static func add(
+        sources: [URL],
+        to archive: URL,
+        archiveFolder: String,
+        compressionLevel: Int,
+        password: String?,
+        handle: ProcessRunner.Handle? = nil,
+        onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
+    ) throws {
+        guard let format = ArchiveFormatCatalog.mutationFormat(for: archive) else {
+            throw ArchiveError.cannotModifyArchive(ArchiveFormatCatalog.mutationUnsupportedMessage(for: archive))
+        }
+        guard let sevenZip = ToolLocator.sevenZipPath else {
+            throw ArchiveError.toolUnavailable("7-Zip")
+        }
+        guard !sources.isEmpty else {
+            throw ArchiveError.invalidSelection
+        }
+        if !archiveFolder.isEmpty {
+            try PathSafety.validateArchiveEntryPath(archiveFolder)
+        }
+
+        let archivePath = archive.standardizedFileURL.path
+        for source in sources {
+            if source.standardizedFileURL.path == archivePath {
+                throw ArchiveError.commandFailed("Cannot add the open archive to itself.")
+            }
+        }
+        if CompressionSupport.archiveIsInsideSourceTree(archive, sources: sources) {
+            throw ArchiveError.archiveInsideSources
+        }
+
+        onProgress?(CompressionProgressUpdate(fraction: 0, message: "Preparing files…", indeterminate: true))
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+
+        let staged = try CompressionSupport.stageForSevenZip(
+            sources,
+            onProgress: { update in onProgress?(update) },
+            isCancelled: { handle?.wasCancelled == true }
+        )
+        defer { staged.cleanup() }
+
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+
+        let nested = try nestStagedItems(staged.urls, under: archiveFolder)
+        defer { nested.cleanup() }
+
+        onProgress?(CompressionProgressUpdate(fraction: 0.08, message: "Copying archive…", indeterminate: true))
+        let destination = try copyArchiveToWorkFile(archive, format: format, handle: handle)
+        var didFinalize = false
+        defer {
+            if !didFinalize {
+                CompressionSupport.cleanupCompressionDestination(destination)
+            }
+        }
+
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+
+        var arguments = [
+            "a",
+            "-y",
+            "-mx\(min(max(compressionLevel, 0), 9))",
+            "-mmt=on",
+            "-bb1",
+            "-snl",
+            "-snh",
+            "-sse",
+            "-r",
+        ]
+        if format == .sevenZip, let password, !password.isEmpty {
+            arguments.append("-mhe=on")
+        }
+        if let password, !password.isEmpty {
+            arguments.append(contentsOf: passwordArguments(for: password))
+        }
+        arguments.append(contentsOf: CompressionSupport.macMetadataSevenZipExclusions.map { "-xr!\($0)" })
+        arguments.append(destination.workURL.path)
+        arguments.append(contentsOf: nested.itemNames)
+
+        CompressDiagnostics.log("7zz update add: \(CompressDiagnostics.redactedArgumentList(arguments))")
+        onProgress?(CompressionProgressUpdate(fraction: 0.12, message: "Adding files…", indeterminate: true))
+
+        let parser = SevenZipProgressParser()
+        let result = try ProcessRunner.runMonitored(
+            executable: sevenZip,
+            arguments: arguments,
+            workingDirectory: nested.workingDirectory,
+            handle: handle,
+            onOutputChunk: { chunk in
+                if let update = parser.ingest(chunk) {
+                    let mapped = 0.12 + min(max(update.fraction, 0), 1) * 0.80
+                    onProgress?(CompressionProgressUpdate(
+                        fraction: mapped,
+                        message: update.message,
+                        indeterminate: update.indeterminate
+                    ))
+                }
+            }
+        )
+        if result.wasCancelled { throw ArchiveError.cancelled }
+        guard result.exitCode == 0 else {
+            let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw mapFailure(message, fallback: "Could not add files to the archive")
+        }
+
+        if format == .zip {
+            try CompressionSupport.stripMacJunkFromZip(at: destination.workURL)
+        }
+
+        onProgress?(CompressionProgressUpdate(fraction: 0.94, message: "Verifying archive…", indeterminate: true))
+        try CompressionSupport.finalizeCompressionDestination(destination) { stagedURL in
+            if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+            _ = try verify(at: stagedURL, password: password, handle: handle)
+        }
+        didFinalize = true
+        onProgress?(CompressionProgressUpdate(fraction: 1.0, message: "Finishing…", indeterminate: false))
+    }
+
+    /// Remove members from an existing archive via a work copy, then atomically replace.
+    static func delete(
+        paths: [String],
+        from archive: URL,
+        password: String?,
+        handle: ProcessRunner.Handle? = nil,
+        onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
+    ) throws {
+        guard let format = ArchiveFormatCatalog.mutationFormat(for: archive) else {
+            throw ArchiveError.cannotModifyArchive(ArchiveFormatCatalog.mutationUnsupportedMessage(for: archive))
+        }
+        guard let sevenZip = ToolLocator.sevenZipPath else {
+            throw ArchiveError.toolUnavailable("7-Zip")
+        }
+        guard !paths.isEmpty else {
+            throw ArchiveError.invalidSelection
+        }
+        for path in paths {
+            try PathSafety.validateArchiveEntryPath(path)
+        }
+
+        onProgress?(CompressionProgressUpdate(fraction: 0, message: "Copying archive…", indeterminate: true))
+        let destination = try copyArchiveToWorkFile(archive, format: format, handle: handle)
+        var didFinalize = false
+        defer {
+            if !didFinalize {
+                CompressionSupport.cleanupCompressionDestination(destination)
+            }
+        }
+
+        let uniquePaths = orderedUniquePaths(paths)
+        let batches = stride(from: 0, to: uniquePaths.count, by: 200).map {
+            Array(uniquePaths[$0..<min($0 + 200, uniquePaths.count)])
+        }
+
+        for (index, batch) in batches.enumerated() {
+            if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+            var arguments = ["d", "-y"]
+            if let password, !password.isEmpty {
+                arguments.append(contentsOf: passwordArguments(for: password))
+            }
+            arguments.append(destination.workURL.path)
+            arguments.append(contentsOf: batch)
+
+            CompressDiagnostics.log("7zz update delete batch \(index + 1)/\(batches.count)")
+            let fraction = batches.count == 1
+                ? 0.4
+                : 0.15 + (Double(index) / Double(batches.count)) * 0.7
+            onProgress?(CompressionProgressUpdate(
+                fraction: fraction,
+                message: "Removing items…",
+                indeterminate: batches.count == 1
+            ))
+
+            let result = try ProcessRunner.run(
+                executable: sevenZip,
+                arguments: arguments,
+                handle: handle
+            )
+            if result.wasCancelled { throw ArchiveError.cancelled }
+            guard result.exitCode == 0 else {
+                let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
+                throw mapFailure(message, fallback: "Could not remove items from the archive")
+            }
+        }
+
+        if format == .zip {
+            try CompressionSupport.stripMacJunkFromZip(at: destination.workURL)
+        }
+
+        onProgress?(CompressionProgressUpdate(fraction: 0.92, message: "Verifying archive…", indeterminate: true))
+        try CompressionSupport.finalizeCompressionDestination(destination) { stagedURL in
+            if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+            _ = try verify(at: stagedURL, password: password, handle: handle)
+        }
+        didFinalize = true
+        onProgress?(CompressionProgressUpdate(fraction: 1.0, message: "Finishing…", indeterminate: false))
+    }
+
+    private static func copyArchiveToWorkFile(
+        _ archive: URL,
+        format: CompressFormat,
+        handle: ProcessRunner.Handle?
+    ) throws -> CompressionSupport.CompressionDestination {
+        if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+        guard FileManager.default.isReadableFile(atPath: archive.path) else {
+            throw ArchiveError.permissionDenied(archive.lastPathComponent)
+        }
+        let destination = CompressionSupport.temporaryCompressionDestination(
+            archive: archive,
+            format: format
+        )
+        do {
+            try FileManager.default.copyItem(at: archive, to: destination.workURL)
+        } catch {
+            CompressionSupport.cleanupCompressionDestination(destination)
+            throw ArchiveError.commandFailed(
+                "Could not copy \(archive.lastPathComponent) to update it: \(error.localizedDescription)"
+            )
+        }
+        return destination
+    }
+
+    private static func nestStagedItems(
+        _ urls: [URL],
+        under archiveFolder: String
+    ) throws -> (workingDirectory: URL, itemNames: [String], cleanup: () -> Void) {
+        if archiveFolder.isEmpty {
+            let context = try CompressionSupport.compressionInvocation(for: urls, archive: urls[0])
+            return (context.workingDirectory, context.itemNames, {})
+        }
+
+        try PathSafety.validateArchiveEntryPath(archiveFolder)
+        let fileManager = FileManager.default
+        let nestRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("ArchivePeek-nest-\(UUID().uuidString)", isDirectory: true)
+        let destFolder = nestRoot.appendingPathComponent(archiveFolder, isDirectory: true)
+        try fileManager.createDirectory(at: destFolder, withIntermediateDirectories: true)
+
+        for url in urls {
+            let dest = destFolder.appendingPathComponent(url.lastPathComponent)
+            do {
+                try fileManager.moveItem(at: url, to: dest)
+            } catch {
+                try? fileManager.removeItem(at: nestRoot)
+                throw error
+            }
+        }
+
+        let first = archiveFolder.split(separator: "/").map(String.init).first ?? archiveFolder
+        return (nestRoot, [first], { try? fileManager.removeItem(at: nestRoot) })
+    }
+
+    private static func orderedUniquePaths(_ paths: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for path in paths {
+            let key = path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            if seen.insert(key).inserted {
+                result.append(path)
+            }
+        }
+        return result
+    }
+
     static func compress(
         sources: [URL],
         to archive: URL,

@@ -2,19 +2,20 @@
 
 A native macOS app for browsing archive contents without extracting everything first, and for creating new archives quickly.
 
-**Version 1.0.26** · macOS 13.0 or later
+**Version 1.0.28** · macOS 13.0 or later
 
 **Source & updates:** [github.com/Tim-the-tinkerer/ArchivePeek](https://github.com/Tim-the-tinkerer/ArchivePeek) — use **ArchivePeek → Check for Updates…** in the app.
 
 ## Features
 
 - **Browse** ZIP, 7z, RAR, TAR, GZ, BZ2, XZ, and many other formats
-- **Extract** selected files, individual items, or entire archives
+- **Extract** selected files, individual items, or entire archives — including **Extract All to Folder**
+- **Add and remove** files in open ZIP, 7z, and TAR archives
 - **Compress** files and folders into ZIP, DMG, 7z, TAR, and more
 - **Comic book ZIP (CBZ)** — optional `.cbz` extension under the ZIP format for comic readers
 - **Verify integrity** of created or open archives
 - **Quick Look** files inside archives
-- **Drag and drop** to open, compress, and pull files out to Finder
+- **Drag and drop** to open, compress, add files to an open archive, and pull files out to Finder
 - **Password-protected** ZIP, DMG, and 7z archives (create and open)
 - **DMG app installer layout** — optional Applications folder shortcut when distributing `.app` bundles
 - **Solid 7z** option for stronger compression on large file sets
@@ -43,6 +44,9 @@ Or double-click `Build ArchivePeek.command` in Finder.
 | Browse folders | Double-click folders in the list |
 | Open a file | Double-click, or select and press Return |
 | Extract | **Extract** menu in the toolbar, or right-click context menu |
+| Extract all to folder | **Extract → Extract All to Folder…** — creates a folder named after the archive |
+| Add files | Plus icon, or drop files onto an open ZIP/7z/TAR archive |
+| Remove files | Trash icon, right-click **Remove from Archive**, or Delete |
 | Verify archive | Shield icon in the toolbar (hover icons for labels) |
 | Create archive | **Compress** (⇧⌘N) or drag files/folders onto the window |
 | Settings | **ArchivePeek → Settings…** (⌘,) |

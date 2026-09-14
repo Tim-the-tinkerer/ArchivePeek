@@ -13,6 +13,8 @@ enum ArchiveError: LocalizedError {
     case cancelled
     case permissionDenied(String)
     case duplicateSourceNames([String])
+    case cannotModifyArchive(String)
+    case archiveInsideSources
 
     var errorDescription: String? {
         switch self {
@@ -42,6 +44,10 @@ enum ArchiveError: LocalizedError {
             let list = names.prefix(5).map { "\"\($0)\"" }.joined(separator: ", ")
             let more = names.count > 5 ? " and \(names.count - 5) more" : ""
             return "Multiple items share the same top-level name (\(list)\(more)). Rename them or compress each from a folder that keeps unique names."
+        case .cannotModifyArchive(let message):
+            return message
+        case .archiveInsideSources:
+            return "Cannot add a folder that contains the open archive. Choose a different item."
         }
     }
 }

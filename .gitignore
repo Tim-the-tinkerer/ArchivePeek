@@ -3,30 +3,48 @@
 .AppleDouble
 .LSOverride
 ._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+Icon?
 
-# Xcode / SwiftPM
+# Swift Package Manager
 .build/
 .swiftpm/
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+
+# Xcode
 DerivedData/
 *.xcodeproj/
 *.xcworkspace/
 xcuserdata/
 *.xcuserstate
+*.xcscmblueprint
 *.moved-aside
 *.hmap
 *.ipa
 *.dSYM.zip
 *.dSYM
+timeline.xctimeline
+playground.xcworkspace
 
 # Built app bundle (produced by build-app.sh)
 ArchivePeek.app/
 
-# Local tool cache (vendor-tools downloads)
+# Local 7-Zip download cache (vendor-tools.sh)
 .cache/
 
-# Logs / diagnostics
+# Logs / diagnostics (verify-build.sh, compress.log)
 *.log
-~/Library/Logs/ArchivePeek/
 
 # Editor / IDE
 .idea/
@@ -34,6 +52,7 @@ ArchivePeek.app/
 *.swp
 *~
 .cursor/
+.grok/
 
 # Secrets / local env
 .env

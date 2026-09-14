@@ -60,4 +60,25 @@ enum PathSafety {
             try validateArchiveEntryPath(entry.path)
         }
     }
+
+    /// Next unused directory `parent/base`, then `parent/base 2`, …
+    static func uniqueChildDirectory(
+        named base: String,
+        in parent: URL,
+        fileManager: FileManager = .default
+    ) -> URL {
+        let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? "Archive" : trimmed
+        let first = parent.appendingPathComponent(name, isDirectory: true)
+        if !fileManager.fileExists(atPath: first.path) {
+            return first
+        }
+        for n in 2...9_999 {
+            let candidate = parent.appendingPathComponent("\(name) \(n)", isDirectory: true)
+            if !fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return parent.appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
+    }
 }

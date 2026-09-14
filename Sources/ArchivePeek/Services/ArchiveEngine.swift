@@ -114,6 +114,123 @@ enum ArchiveEngine {
         }.value
     }
 
+    static func addToArchive(
+        sources: [URL],
+        archive: URL,
+        archiveFolder: String,
+        compressionLevel: Int = 5,
+        password: String? = nil,
+        accessTokens: [SecurityScopedAccess.Token] = [],
+        handle: ProcessRunner.Handle? = nil,
+        onProgress: @escaping @Sendable (CompressionProgressUpdate) -> Void
+    ) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+            _ = SecurityScopedAccess.activate(accessTokens)
+            defer { SecurityScopedAccess.deactivate(accessTokens) }
+            try SecurityScopedAccess.validateReadable([archive] + sources)
+            guard ArchiveFormatCatalog.supportsMutation(archive) else {
+                throw ArchiveError.cannotModifyArchive(
+                    ArchiveFormatCatalog.mutationUnsupportedMessage(for: archive)
+                )
+            }
+            guard FileManager.default.isWritableFile(atPath: archive.path) else {
+                throw ArchiveError.permissionDenied(archive.lastPathComponent)
+            }
+            try SevenZipBackend.add(
+                sources: sources,
+                to: archive,
+                archiveFolder: archiveFolder,
+                compressionLevel: compressionLevel,
+                password: password,
+                handle: handle,
+                onProgress: onProgress
+            )
+        }.value
+    }
+
+    static func removeFromArchive(
+        entries: [ArchiveEntry],
+        archive: URL,
+        catalogEntries: [ArchiveEntry],
+        truncatedListing: Bool,
+        password: String? = nil,
+        accessTokens: [SecurityScopedAccess.Token] = [],
+        handle: ProcessRunner.Handle? = nil,
+        onProgress: @escaping @Sendable (CompressionProgressUpdate) -> Void
+    ) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+            _ = SecurityScopedAccess.activate(accessTokens)
+            defer { SecurityScopedAccess.deactivate(accessTokens) }
+            try SecurityScopedAccess.validateReadable([archive])
+            guard ArchiveFormatCatalog.supportsMutation(archive) else {
+                throw ArchiveError.cannotModifyArchive(
+                    ArchiveFormatCatalog.mutationUnsupportedMessage(for: archive)
+                )
+            }
+            guard FileManager.default.isWritableFile(atPath: archive.path) else {
+                throw ArchiveError.permissionDenied(archive.lastPathComponent)
+            }
+
+            let expanded = expandEntriesForRemoval(entries, catalog: catalogEntries)
+            guard !expanded.isEmpty else {
+                throw ArchiveError.invalidSelection
+            }
+            if truncatedListing, entries.contains(where: \.isDirectory) {
+                throw ArchiveError.cannotModifyArchive(
+                    "This archive listing is truncated, so folders cannot be removed safely. Remove individual files, or extract and create a new archive."
+                )
+            }
+            try PathSafety.validateEntries(expanded)
+            var deletePaths: [String] = []
+            for entry in expanded {
+                deletePaths.append(entry.normalizedPath)
+                if entry.isDirectory {
+                    deletePaths.append(entry.normalizedPath + "/")
+                } else {
+                    deletePaths.append(entry.path)
+                }
+            }
+            try SevenZipBackend.delete(
+                paths: deletePaths,
+                from: archive,
+                password: password,
+                handle: handle,
+                onProgress: onProgress
+            )
+        }.value
+    }
+
+    private static func expandEntriesForRemoval(
+        _ entries: [ArchiveEntry],
+        catalog: [ArchiveEntry]
+    ) -> [ArchiveEntry] {
+        var seen = Set<String>()
+        var result: [ArchiveEntry] = []
+
+        func include(_ entry: ArchiveEntry) {
+            let key = entry.normalizedPath.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            if seen.insert(key).inserted {
+                result.append(entry)
+            }
+        }
+
+        for entry in entries {
+            include(entry)
+            guard entry.isDirectory else { continue }
+            let prefix = entry.normalizedPath
+            let childPrefix = prefix + "/"
+            for candidate in catalog {
+                let path = candidate.normalizedPath
+                if path == prefix || path.hasPrefix(childPrefix) {
+                    include(candidate)
+                }
+            }
+        }
+        return result
+    }
+
     private static func performCompress(
         sources: [URL],
         to archive: URL,

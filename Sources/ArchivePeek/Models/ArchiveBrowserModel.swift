@@ -32,6 +32,11 @@ final class ArchiveBrowserModel: ObservableObject {
     @Published var compressProgressIndeterminate = false
     @Published var isDropTargeted = false
     @Published private(set) var isPreviewing = false
+    @Published var progressOperationTitle = "Creating Archive"
+    @Published var showRemoveConfirmation = false
+    @Published var showAddReplaceConfirmation = false
+    @Published private(set) var removeConfirmationMessage = ""
+    @Published private(set) var addReplaceConfirmationMessage = ""
 
     private var compressionHandle: ProcessRunner.Handle?
     /// Cancels in-flight extract / open / verify subprocesses when closing or switching archives.
@@ -50,6 +55,9 @@ final class ArchiveBrowserModel: ObservableObject {
     private var dragOutHandles: [String: ProcessRunner.Handle] = [:]
     private var compressAccessTokens: [SecurityScopedAccess.Token] = []
     private var compressGeneration = 0
+    private var pendingAddURLs: [URL] = []
+    private var pendingAddTokens: [SecurityScopedAccess.Token] = []
+    private var pendingRemoveEntries: [ArchiveEntry] = []
 
     init() {
         AppSettings.applyCompressionDefaults(to: self)
@@ -79,6 +87,27 @@ final class ArchiveBrowserModel: ObservableObject {
         isBrowsingArchive || needsPassword
     }
 
+    var canMutateOpenArchive: Bool {
+        listing != nil
+            && archiveURL.map { ArchiveFormatCatalog.supportsMutation($0) } == true
+            && ToolLocator.isSevenZipAvailable
+    }
+
+    var mutationUnavailableReason: String? {
+        guard listing != nil, let archiveURL else { return nil }
+        if !ToolLocator.isSevenZipAvailable {
+            return "Adding and removing files requires 7-Zip."
+        }
+        if !ArchiveFormatCatalog.supportsMutation(archiveURL) {
+            return ArchiveFormatCatalog.mutationUnsupportedMessage(for: archiveURL)
+        }
+        return nil
+    }
+
+    private var isBusy: Bool {
+        isLoading || isCompressing || isPreviewing
+    }
+
     func closeArchive() {
         loadTask?.cancel()
         loadHandle?.cancel()
@@ -103,6 +132,10 @@ final class ArchiveBrowserModel: ObservableObject {
         needsPassword = false
         errorMessage = nil
         isLoading = false
+        showRemoveConfirmation = false
+        showAddReplaceConfirmation = false
+        pendingRemoveEntries = []
+        clearPendingAdd()
 
         rebuildFolderIndex()
         statusMessage = "Open an archive to browse its contents."
@@ -280,6 +313,13 @@ final class ArchiveBrowserModel: ObservableObject {
         }
     }
 
+    func extractAllToFolder() {
+        guard archiveURL != nil else { return }
+        chooseDestination { destination, tokens in
+            Task { await self.extractAllToNamedFolder(in: destination, destinationTokens: tokens) }
+        }
+    }
+
     func handleDroppedURLs(_ urls: [URL]) {
         let standardized = urls.map { $0.standardizedFileURL }
         let tokens = SecurityScopedAccess.captureTokens(for: standardized)
@@ -304,6 +344,17 @@ final class ArchiveBrowserModel: ObservableObject {
         let compressTokens = tokens.filter { token in
             compressibles.contains(token.url)
         }
+
+        if listing != nil, archives.isEmpty, !showCompressSheet {
+            if canMutateOpenArchive {
+                requestAddToOpenArchive(compressibles, tokens: compressTokens)
+            } else {
+                errorMessage = mutationUnavailableReason
+                    ?? "This archive cannot be modified. Use Compress to create a new archive."
+            }
+            return
+        }
+
         integrateCompressSources(compressibles, tokens: compressTokens)
         if archives.isEmpty {
             presentCompressSheet()
@@ -461,7 +512,62 @@ final class ArchiveBrowserModel: ObservableObject {
 
     func cancelCompression() {
         compressionHandle?.cancel()
-        statusMessage = "Stopping compression…"
+        statusMessage = "Stopping…"
+    }
+
+    func presentAddFilesPanel() {
+        guard listing != nil, !isBusy else { return }
+        guard canMutateOpenArchive else {
+            errorMessage = mutationUnavailableReason
+                ?? "This archive cannot be modified."
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.canCreateDirectories = false
+        panel.prompt = "Add"
+        panel.message = currentPath.isEmpty
+            ? "Choose files or folders to add to the archive."
+            : "Choose files or folders to add to “\(currentPath)”."
+        panel.begin { [weak self] response in
+            guard let self, response == .OK else { return }
+            let urls = panel.urls.map { $0.standardizedFileURL }
+            guard !urls.isEmpty else { return }
+            let tokens = SecurityScopedAccess.captureTokens(for: urls)
+            self.requestAddToOpenArchive(urls, tokens: tokens)
+        }
+    }
+
+    func requestRemoveSelected() {
+        requestRemove(selectedVisibleEntries())
+    }
+
+    func requestRemoveEntry(_ entry: ArchiveEntry) {
+        requestRemove([canonicalEntry(for: entry)])
+    }
+
+    func confirmRemoveSelected() {
+        showRemoveConfirmation = false
+        let entries = pendingRemoveEntries
+        pendingRemoveEntries = []
+        guard !entries.isEmpty else { return }
+        Task { await removeFromOpenArchive(entries) }
+    }
+
+    func confirmAddReplacingExisting() {
+        showAddReplaceConfirmation = false
+        let urls = pendingAddURLs
+        let tokens = pendingAddTokens
+        clearPendingAdd()
+        guard !urls.isEmpty else { return }
+        Task { await addToOpenArchive(urls, tokens: tokens) }
+    }
+
+    func cancelPendingAdd() {
+        showAddReplaceConfirmation = false
+        clearPendingAdd()
     }
 
     func chooseCompressDestination() {
@@ -475,9 +581,14 @@ final class ArchiveBrowserModel: ObservableObject {
             return
         }
 
-        if compressDmgAppInstaller && !canCreateDmgAppInstaller {
-            errorMessage = "App installer layout requires at least one .app bundle."
+        // App installer layout is DMG-only. Ignore a stale true flag on ZIP/7z/etc.
+        // (Previously: defaultDmgAppInstaller + non-DMG format always failed Create Archive.)
+        if compressFormat.isDmg && compressDmgAppInstaller && !canCreateDmgAppInstaller {
+            errorMessage = "App installer layout requires at least one top-level .app bundle. Use DMG with a selected .app, or turn off App installer layout."
             return
+        }
+        if !compressFormat.isDmg {
+            compressDmgAppInstaller = false
         }
 
         let panel = NSSavePanel()
@@ -611,12 +722,13 @@ final class ArchiveBrowserModel: ObservableObject {
         }
     }
 
+    @discardableResult
     private func extractAll(
         to destination: URL,
         destinationTokens: [SecurityScopedAccess.Token]
-    ) async {
+    ) async -> Bool {
         let generation = operationGeneration
-        guard let archiveURL else { return }
+        guard let archiveURL else { return false }
         let sourceArchive = archiveURL
 
         var heldTokens = destinationTokens
@@ -644,17 +756,58 @@ final class ArchiveBrowserModel: ObservableObject {
                 password: password.isEmpty ? nil : password,
                 handle: handle
             )
-            guard generation == operationGeneration, archiveURL == sourceArchive else { return }
+            guard generation == operationGeneration, archiveURL == sourceArchive else { return false }
             statusMessage = "Extracted archive to \(destination.path)."
             NSWorkspace.shared.activateFileViewerSelecting([destination])
+            return true
         } catch ArchiveError.cancelled {
-            guard generation == operationGeneration, archiveURL == sourceArchive else { return }
+            guard generation == operationGeneration, archiveURL == sourceArchive else { return false }
             statusMessage = "Extraction cancelled."
+            return false
         } catch {
-            guard generation == operationGeneration, archiveURL == sourceArchive else { return }
+            guard generation == operationGeneration, archiveURL == sourceArchive else { return false }
             errorMessage = error.localizedDescription
             statusMessage = "Extraction failed."
+            return false
         }
+    }
+
+    private func extractAllToNamedFolder(
+        in destination: URL,
+        destinationTokens: [SecurityScopedAccess.Token]
+    ) async {
+        let generation = operationGeneration
+        guard let archiveURL else { return }
+        let sourceArchive = archiveURL
+
+        var heldTokens = destinationTokens
+        if heldTokens.isEmpty {
+            heldTokens = SecurityScopedAccess.captureTokens(for: [
+                destination,
+                destination.deletingLastPathComponent(),
+            ])
+        }
+        _ = SecurityScopedAccess.activate(heldTokens)
+        defer { SecurityScopedAccess.releaseAll(&heldTokens) }
+
+        let folder = PathSafety.uniqueChildDirectory(
+            named: ArchiveFormatCatalog.displayBasename(for: sourceArchive),
+            in: destination
+        )
+
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        } catch {
+            guard generation == operationGeneration, archiveURL == sourceArchive else { return }
+            errorMessage = "Could not create folder “\(folder.lastPathComponent)”: \(error.localizedDescription)"
+            statusMessage = "Extraction failed."
+            return
+        }
+
+        let succeeded = await extractAll(to: folder, destinationTokens: destinationTokens)
+        guard generation == operationGeneration, archiveURL == sourceArchive, succeeded else { return }
+        statusMessage = "Extracted archive to \(folder.path)."
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
     private func openFile(_ entry: ArchiveEntry) async {
@@ -899,6 +1052,7 @@ final class ArchiveBrowserModel: ObservableObject {
         )
 
         isCompressing = true
+        progressOperationTitle = "Creating Archive"
         compressProgress = 0
         compressProgressMessage = "Compressing…"
         compressProgressIndeterminate = true
@@ -927,7 +1081,8 @@ final class ArchiveBrowserModel: ObservableObject {
                 compressionLevel: compressionLevel,
                 password: compressPassword.isEmpty ? nil : compressPassword,
                 solidArchive: compressSolidArchive,
-                dmgAppInstallerLayout: compressDmgAppInstaller,
+                // Never pass installer layout unless format is DMG (flag can linger from Settings).
+                dmgAppInstallerLayout: compressFormat.isDmg && compressDmgAppInstaller,
                 // When enabled, verify the staged sibling **before** replacing any existing file.
                 verifyBeforeCommit: verifyAfterCompress,
                 accessTokens: accessTokens,
@@ -1034,6 +1189,211 @@ final class ArchiveBrowserModel: ObservableObject {
         releaseSecurityScopedAccess()
         releaseCompressAccess()
         TempFileRegistry.cleanupAll()
+    }
+
+    private func requestAddToOpenArchive(
+        _ urls: [URL],
+        tokens: [SecurityScopedAccess.Token]
+    ) {
+        guard listing != nil, !isBusy else { return }
+        guard canMutateOpenArchive else {
+            errorMessage = mutationUnavailableReason
+                ?? "This archive cannot be modified."
+            return
+        }
+        let collisions = collidingArchiveNames(for: urls)
+        if collisions.isEmpty {
+            Task { await addToOpenArchive(urls, tokens: tokens) }
+            return
+        }
+        pendingAddURLs = urls
+        pendingAddTokens = tokens
+        let listed = collisions.prefix(5).map { "“\($0)”" }.joined(separator: ", ")
+        let extra = collisions.count > 5 ? " and \(collisions.count - 5) more" : ""
+        addReplaceConfirmationMessage = "\(listed)\(extra) already exist in this folder. Replace them?"
+        showAddReplaceConfirmation = true
+    }
+
+    private func addToOpenArchive(
+        _ urls: [URL],
+        tokens: [SecurityScopedAccess.Token]
+    ) async {
+        guard let archiveURL else { return }
+        let sourceArchive = archiveURL
+        let folder = currentPath
+        let requestPassword = password.isEmpty ? nil : password
+        var heldTokens = tokens
+        heldTokens.append(contentsOf: archiveAccessTokens)
+
+        compressGeneration += 1
+        let generation = compressGeneration
+        operationHandle?.cancel()
+        operationGeneration += 1
+
+        isCompressing = true
+        progressOperationTitle = "Adding Files"
+        compressProgress = 0
+        compressProgressMessage = "Preparing…"
+        compressProgressIndeterminate = true
+        errorMessage = nil
+        statusMessage = "Adding \(urls.count) item(s) to \(sourceArchive.lastPathComponent)…"
+
+        let handle = ProcessRunner.Handle()
+        compressionHandle = handle
+
+        defer {
+            if generation == compressGeneration {
+                isCompressing = false
+                compressionHandle = nil
+            }
+        }
+
+        do {
+            try await ArchiveEngine.addToArchive(
+                sources: urls,
+                archive: sourceArchive,
+                archiveFolder: folder,
+                compressionLevel: compressionLevel,
+                password: requestPassword,
+                accessTokens: heldTokens,
+                handle: handle,
+                onProgress: { [weak self] update in
+                    Task { @MainActor in
+                        guard let self, generation == self.compressGeneration else { return }
+                        self.compressProgress = update.fraction
+                        self.compressProgressMessage = update.message
+                        self.compressProgressIndeterminate = update.indeterminate
+                    }
+                }
+            )
+            guard generation == compressGeneration, archiveURL == sourceArchive else { return }
+            statusMessage = "Added \(urls.count) item(s) to \(sourceArchive.lastPathComponent)."
+            reloadOpenArchivePreservingPath()
+        } catch ArchiveError.cancelled {
+            guard generation == compressGeneration else { return }
+            statusMessage = "Add cancelled."
+        } catch {
+            guard generation == compressGeneration, archiveURL == sourceArchive else { return }
+            errorMessage = error.localizedDescription
+            statusMessage = "Could not add files to the archive."
+        }
+    }
+
+    private func requestRemove(_ entries: [ArchiveEntry]) {
+        guard listing != nil, !isBusy else { return }
+        guard canMutateOpenArchive else {
+            errorMessage = mutationUnavailableReason
+                ?? "This archive cannot be modified."
+            return
+        }
+        let selected = entries.map { canonicalEntry(for: $0) }
+        guard !selected.isEmpty else {
+            errorMessage = "Select one or more items to remove."
+            return
+        }
+        let names = selected.prefix(5).map(\.displayName)
+        let extra = selected.count > 5 ? " and \(selected.count - 5) more" : ""
+        let archiveName = archiveURL?.lastPathComponent ?? "the archive"
+        pendingRemoveEntries = selected
+        removeConfirmationMessage = "Remove \(names.map { "“\($0)”" }.joined(separator: ", "))\(extra) from \(archiveName)? The archive is replaced only after the change succeeds."
+        showRemoveConfirmation = true
+    }
+
+    private func removeFromOpenArchive(_ entries: [ArchiveEntry]) async {
+        guard let archiveURL, let listing else { return }
+        let sourceArchive = archiveURL
+        let requestPassword = password.isEmpty ? nil : password
+        let selected = entries.map { canonicalEntry(for: $0) }
+
+        compressGeneration += 1
+        let generation = compressGeneration
+        operationHandle?.cancel()
+        operationGeneration += 1
+
+        isCompressing = true
+        progressOperationTitle = "Removing Items"
+        compressProgress = 0
+        compressProgressMessage = "Preparing…"
+        compressProgressIndeterminate = true
+        errorMessage = nil
+        statusMessage = "Removing \(selected.count) item(s) from \(sourceArchive.lastPathComponent)…"
+
+        let handle = ProcessRunner.Handle()
+        compressionHandle = handle
+
+        defer {
+            if generation == compressGeneration {
+                isCompressing = false
+                compressionHandle = nil
+            }
+        }
+
+        do {
+            try await ArchiveEngine.removeFromArchive(
+                entries: selected,
+                archive: sourceArchive,
+                catalogEntries: listing.entries,
+                truncatedListing: listing.truncated,
+                password: requestPassword,
+                accessTokens: archiveAccessTokens,
+                handle: handle,
+                onProgress: { [weak self] update in
+                    Task { @MainActor in
+                        guard let self, generation == self.compressGeneration else { return }
+                        self.compressProgress = update.fraction
+                        self.compressProgressMessage = update.message
+                        self.compressProgressIndeterminate = update.indeterminate
+                    }
+                }
+            )
+            guard generation == compressGeneration, archiveURL == sourceArchive else { return }
+            statusMessage = "Removed \(selected.count) item(s) from \(sourceArchive.lastPathComponent)."
+            selection.removeAll()
+            reloadOpenArchivePreservingPath()
+        } catch ArchiveError.cancelled {
+            guard generation == compressGeneration else { return }
+            statusMessage = "Remove cancelled."
+        } catch {
+            guard generation == compressGeneration, archiveURL == sourceArchive else { return }
+            errorMessage = error.localizedDescription
+            statusMessage = "Could not remove items from the archive."
+        }
+    }
+
+    private func reloadOpenArchivePreservingPath() {
+        let path = currentPath
+        loadArchive()
+        currentPath = path
+    }
+
+    private func collidingArchiveNames(for urls: [URL]) -> [String] {
+        guard let listing else { return [] }
+        var existing = Set<String>()
+        for entry in listing.entries {
+            existing.insert(entry.normalizedPath.lowercased(with: Locale(identifier: "en_US_POSIX")))
+        }
+        for entry in visibleEntries {
+            existing.insert(entry.normalizedPath.lowercased(with: Locale(identifier: "en_US_POSIX")))
+        }
+
+        var collisions: [String] = []
+        for url in urls {
+            let name = url.lastPathComponent
+            if name == ".DS_Store" || name == "__MACOSX" || name.hasPrefix("._") { continue }
+            let dest = currentPath.isEmpty ? name : currentPath + "/" + name
+            let key = dest.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            let childPrefix = key + "/"
+            if existing.contains(key) || existing.contains(where: { $0.hasPrefix(childPrefix) }) {
+                collisions.append(name)
+            }
+        }
+        return collisions
+    }
+
+    private func clearPendingAdd() {
+        pendingAddURLs = []
+        pendingAddTokens = []
+        addReplaceConfirmationMessage = ""
     }
 
     private func chooseDestination(

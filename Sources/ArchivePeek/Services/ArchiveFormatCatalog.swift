@@ -50,6 +50,41 @@ enum ArchiveFormatCatalog {
         return ext.isEmpty ? "Archive" : ext.uppercased()
     }
 
+    /// ZIP family, 7z, and uncompressed TAR can be updated in place (via a work copy).
+    static func supportsMutation(_ url: URL) -> Bool {
+        mutationFormat(for: url) != nil
+    }
+
+    static func mutationFormat(for url: URL) -> CompressFormat? {
+        let ext = normalizedExtension(for: url)
+        if zipExtensions.contains(ext) { return .zip }
+        if sevenZipExtensions.contains(ext) { return .sevenZip }
+        if ext == "tar" { return .tar }
+        return nil
+    }
+
+    static func mutationUnsupportedMessage(for url: URL) -> String {
+        let label = formatLabel(for: url)
+        return "\(label) archives cannot be modified. Extract the contents and create a new archive instead."
+    }
+
+    /// Archive file name without the format suffix (`Report.tar.gz` → `Report`).
+    static func displayBasename(for url: URL) -> String {
+        let name = url.lastPathComponent
+        let ext = normalizedExtension(for: url)
+        var base = name
+        if !ext.isEmpty {
+            let suffix = "." + ext
+            if name.lowercased().hasSuffix(suffix) {
+                base = String(name.dropLast(suffix.count))
+            }
+        }
+        let trimmed = base.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        return trimmed.isEmpty ? "Archive" : trimmed
+    }
+
     static func normalizedExtension(for url: URL) -> String {
         let name = url.lastPathComponent.lowercased()
         for compound in ["tar.gz", "tar.bz2", "tar.xz", "tar.zst"] {

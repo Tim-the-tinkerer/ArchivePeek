@@ -2,6 +2,8 @@
 cd "$(dirname "$0")"
 
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:${PATH:-}"
+# shellcheck source=select-xcode-toolchain.sh
+source "./select-xcode-toolchain.sh"
 
 echo "======================================"
 echo " ArchivePeek Builder"
@@ -10,8 +12,15 @@ echo ""
 
 if ! command -v swift >/dev/null 2>&1; then
     echo "ERROR: Swift not found."
-    echo "Install Xcode Command Line Tools:"
-    echo "  xcode-select --install"
+    echo "Install Xcode from the App Store (Command Line Tools alone cannot build this app)."
+    echo ""
+    read -r -p "Press Return to close..."
+    exit 1
+fi
+
+if [[ -z "${DEVELOPER_DIR:-}" || "${DEVELOPER_DIR}" == *CommandLineTools* ]]; then
+    echo "ERROR: Building ArchivePeek requires full Xcode, not Command Line Tools."
+    echo "Install Xcode from the App Store, then retry."
     echo ""
     read -r -p "Press Return to close..."
     exit 1

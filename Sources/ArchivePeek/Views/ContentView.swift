@@ -33,8 +33,8 @@ struct ContentView: View {
         .overlay {
             DropHighlightOverlay(
                 isTargeted: browser.isDropTargeted,
-                title: "Drop to Open or Compress",
-                subtitle: "Archives open for browsing. Files and folders are added to compress."
+                title: dropOverlayTitle,
+                subtitle: dropOverlaySubtitle
             )
             .animation(.easeInOut(duration: 0.15), value: browser.isDropTargeted)
         }
@@ -42,6 +42,32 @@ struct ContentView: View {
             Button("OK") { browser.errorMessage = nil }
         } message: {
             Text(browser.errorMessage ?? "")
+        }
+        .confirmationDialog(
+            "Remove from Archive",
+            isPresented: $browser.showRemoveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                browser.confirmRemoveSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(browser.removeConfirmationMessage)
+        }
+        .confirmationDialog(
+            "Replace Existing Items?",
+            isPresented: $browser.showAddReplaceConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Replace", role: .destructive) {
+                browser.confirmAddReplacingExisting()
+            }
+            Button("Cancel", role: .cancel) {
+                browser.cancelPendingAdd()
+            }
+        } message: {
+            Text(browser.addReplaceConfirmationMessage)
         }
         .sheet(isPresented: $browser.needsPassword) {
             PasswordSheet()
@@ -101,8 +127,12 @@ struct ContentView: View {
                     }
                     .disabled(browser.selection.isEmpty)
 
-                    Button("Extract All") {
+                    Button("Extract All…") {
                         browser.extractAll()
+                    }
+
+                    Button("Extract All to Folder…") {
+                        browser.extractAllToFolder()
                     }
                 } label: {
                     Label("Extract", systemImage: "square.and.arrow.down")
@@ -111,6 +141,28 @@ struct ContentView: View {
                 .fixedSize()
                 .help("Extract files from the archive")
                 .disabled(isBusy)
+
+                toolbarButton(
+                    "Add Files",
+                    systemImage: "plus",
+                    help: browser.canMutateOpenArchive
+                        ? "Add files or folders to the current folder"
+                        : (browser.mutationUnavailableReason ?? "This archive cannot be modified")
+                ) {
+                    browser.presentAddFilesPanel()
+                }
+                .disabled(isBusy || !browser.canMutateOpenArchive)
+
+                toolbarButton(
+                    "Remove",
+                    systemImage: "trash",
+                    help: browser.canMutateOpenArchive
+                        ? "Remove selected items from the archive"
+                        : (browser.mutationUnavailableReason ?? "This archive cannot be modified")
+                ) {
+                    browser.requestRemoveSelected()
+                }
+                .disabled(isBusy || !browser.canMutateOpenArchive || browser.selection.isEmpty)
 
                 toolbarButton("Quick Look", systemImage: "eye", help: "Preview the selected file") {
                     browser.quickLookSelected()
@@ -198,6 +250,23 @@ struct ContentView: View {
             get: { browser.errorMessage != nil },
             set: { if !$0 { browser.errorMessage = nil } }
         )
+    }
+
+    private var dropOverlayTitle: String {
+        if browser.isBrowsingArchive {
+            return browser.canMutateOpenArchive ? "Drop to Add or Open" : "Drop to Open"
+        }
+        return "Drop to Open or Compress"
+    }
+
+    private var dropOverlaySubtitle: String {
+        if browser.isBrowsingArchive {
+            if browser.canMutateOpenArchive {
+                return "Files and folders are added to this folder. Drop an archive to open it instead."
+            }
+            return "Drop an archive to open it. This format cannot be modified."
+        }
+        return "Archives open for browsing. Files and folders are added to compress."
     }
 
     private func openArchivePanel() {

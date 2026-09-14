@@ -11,7 +11,7 @@ struct CompressionProgressOverlay: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Label("Creating Archive", systemImage: "doc.zipper")
+                    Label(browser.progressOperationTitle, systemImage: progressSymbol)
                         .font(.headline)
                     Spacer()
                 }
@@ -45,6 +45,14 @@ struct CompressionProgressOverlay: View {
             .frame(width: 380)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
             .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+        }
+    }
+
+    private var progressSymbol: String {
+        switch browser.progressOperationTitle {
+        case "Adding Files": return "plus.circle"
+        case "Removing Items": return "trash"
+        default: return "doc.zipper"
         }
     }
 

@@ -48,6 +48,9 @@ struct ArchiveBrowserView: View {
             onOpenSelected: { browser.openSelectedEntry() },
             onExtractSelected: { browser.extractSelected() },
             onQuickLookSelected: { browser.quickLookSelected() },
+            onRemoveEntry: { browser.requestRemoveEntry($0) },
+            onRemoveSelected: { browser.requestRemoveSelected() },
+            canRemoveFromArchive: browser.canMutateOpenArchive,
             onPrepareDragOut: { browser.prepareDragOut(for: $0) },
             preparedDragURL: { browser.preparedDragURL(for: $0) },
             writeDraggedEntry: { browser.writeDraggedEntryToPromise($0, url: $1, completion: $2) }
@@ -63,7 +66,11 @@ struct ArchiveBrowserView: View {
                 .foregroundStyle(.secondary)
             Text("Empty Folder")
                 .font(.headline)
-            Text("This folder contains no items.")
+            Text(
+                browser.canMutateOpenArchive
+                    ? "Drop files here to add them, or use Add Files."
+                    : "This folder contains no items."
+            )
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

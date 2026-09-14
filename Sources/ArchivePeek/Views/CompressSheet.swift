@@ -129,6 +129,12 @@ struct CompressSheet: View {
         }
         .padding(24)
         .frame(width: 480)
+        .onAppear {
+            // Sheet can open with ZIP/7z while a DMG-only setting left the installer flag on.
+            if !browser.compressFormat.isDmg || !browser.canCreateDmgAppInstaller {
+                browser.compressDmgAppInstaller = false
+            }
+        }
         .onChange(of: browser.compressFormat) { format in
             if !format.isDmg {
                 browser.compressDmgAppInstaller = false
