@@ -39,7 +39,7 @@ if [[ -x "$APP" ]]; then pass "ArchivePeek binary exists"; else fail "ArchivePee
 if [[ -x "$BUNDLED_7ZZ" ]]; then pass "Bundled 7zz exists"; else fail "Bundled 7zz missing"; fi
 if "$TOOLS" >/dev/null 2>&1; then pass "Materialized 7zz runs"; else fail "Materialized 7zz smoke test"; fi
 VER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ArchivePeek.app/Contents/Info.plist)
-[[ "$VER" == "1.0.27" ]] && pass "Version is 1.0.27" || fail "Version expected 1.0.27, got $VER"
+[[ "$VER" == "1.0.31" ]] && pass "Version is 1.0.31" || fail "Version expected 1.0.31, got $VER"
 
 echo
 echo "2. Browse / list archives"
@@ -73,6 +73,19 @@ if /usr/bin/tar -tvf "$TMP/Fun Stuff.tar" 2>&1 | grep -q "Fun Stuff/track one.mp
   pass "TAR with spaces lists correctly"
 else
   fail "TAR listing with spaces"
+fi
+
+"$TOOLS" a -t7z -v512 "$TMP/split.7z" "$TMP/Fun Stuff/track one.mp3" "$TMP/Fun Stuff/track two.mp3" >/dev/null
+# Same as Compress → Split into volumes (7-Zip -v).
+if [[ -f "$TMP/split.7z.001" ]] && "$TOOLS" l -slt -ba -bd -bb0 "$TMP/split.7z.001" 2>/dev/null | grep -q "track one.mp3"; then
+  pass "Split 7z lists from first volume (.001)"
+else
+  fail "Split 7z listing from .001"
+fi
+if [[ -f "$TMP/split.7z.002" ]]; then
+  pass "Split 7z produced extra volumes"
+else
+  fail "Split 7z extra volumes (.002)"
 fi
 
 echo

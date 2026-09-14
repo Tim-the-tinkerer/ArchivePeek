@@ -560,9 +560,183 @@ enum CompressionSupport {
         // Only the system-temp work file. Destination-directory siblings are cleaned
         // by finalizeCompressionDestination on its own failure path (do not scan the folder —
         // another concurrent compress might own a partial there).
-        if destination.shouldRelocate,
-           fileManager.fileExists(atPath: destination.workURL.path) {
-            try? fileManager.removeItem(at: destination.workURL)
+        if destination.shouldRelocate {
+            for url in createdVolumes(fromWorkBase: destination.workURL, fileManager: fileManager) {
+                try? fileManager.removeItem(at: url)
+            }
+            if fileManager.fileExists(atPath: destination.workURL.path) {
+                try? fileManager.removeItem(at: destination.workURL)
+            }
+        }
+    }
+
+    /// Volumes written next to a work base (`archive.7z` → `archive.7z.001`, or `archive.part1.rar`).
+    static func createdVolumes(
+        fromWorkBase workURL: URL,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        let firstNumeric = URL(fileURLWithPath: workURL.path + ".001")
+        if fileManager.fileExists(atPath: firstNumeric.path) {
+            return SplitArchive.set(for: firstNumeric, fileManager: fileManager)?.volumes ?? [firstNumeric]
+        }
+        let stem = workURL.deletingPathExtension().lastPathComponent
+        let parent = workURL.deletingLastPathComponent()
+        for part in ["\(stem).part1.rar", "\(stem).part01.rar"] {
+            let url = parent.appendingPathComponent(part)
+            if fileManager.fileExists(atPath: url.path) {
+                return SplitArchive.set(for: url, fileManager: fileManager)?.volumes ?? [url]
+            }
+        }
+        if let split = SplitArchive.set(for: workURL, fileManager: fileManager), split.isMultiVolume {
+            return split.volumes
+        }
+        if fileManager.fileExists(atPath: workURL.path) {
+            return [workURL]
+        }
+        return []
+    }
+
+    static func mapWorkVolume(
+        _ workVolume: URL,
+        workBase: URL,
+        finalBase: URL
+    ) -> URL {
+        let parent = finalBase.deletingLastPathComponent()
+        let workName = workVolume.lastPathComponent
+        let workBaseName = workBase.lastPathComponent
+        let finalBaseName = finalBase.lastPathComponent
+        if workName.compare(workBaseName, options: .caseInsensitive) == .orderedSame {
+            return parent.appendingPathComponent(finalBaseName)
+        }
+        if workName.lowercased().hasPrefix(workBaseName.lowercased() + ".") {
+            let extra = String(workName.dropFirst(workBaseName.count))
+            return parent.appendingPathComponent(finalBaseName + extra)
+        }
+        let workStem = (workBaseName as NSString).deletingPathExtension
+        let finalStem = (finalBaseName as NSString).deletingPathExtension
+        if let range = workName.range(of: workStem, options: .caseInsensitive) {
+            var mapped = workName
+            mapped.replaceSubrange(range, with: finalStem)
+            return parent.appendingPathComponent(mapped)
+        }
+        return parent.appendingPathComponent(workName)
+    }
+
+    /// Volumes that a split create would replace next to `finalBase` (`Backup.7z` → `Backup.7z.001`, …).
+    static func existingSplitDestinations(
+        for finalBase: URL,
+        format: CompressFormat,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        var urls: [URL] = []
+        let firstNumeric = URL(fileURLWithPath: finalBase.path + ".001")
+        if fileManager.fileExists(atPath: firstNumeric.path) {
+            urls.append(contentsOf: SplitArchive.set(for: firstNumeric, fileManager: fileManager)?.volumes ?? [firstNumeric])
+        }
+        if format.isRar {
+            let stem = finalBase.deletingPathExtension().lastPathComponent
+            let parent = finalBase.deletingLastPathComponent()
+            for name in ["\(stem).part1.rar", "\(stem).part01.rar"] {
+                let url = parent.appendingPathComponent(name)
+                if fileManager.fileExists(atPath: url.path) {
+                    urls.append(contentsOf: SplitArchive.set(for: url, fileManager: fileManager)?.volumes ?? [url])
+                }
+            }
+        }
+        if fileManager.fileExists(atPath: finalBase.path) {
+            urls.append(finalBase)
+        }
+        var seen = Set<String>()
+        return urls.filter { seen.insert($0.path.lowercased()).inserted }
+    }
+
+    /// Verify the temp set (shared names so 7-Zip/RAR can chain), then replace finals with rollback.
+    @discardableResult
+    static func finalizeSplitVolumes(
+        workBase: URL,
+        workVolumes: [URL],
+        finalBase: URL,
+        fileManager: FileManager = .default,
+        beforeCommit: ((URL) throws -> Void)? = nil
+    ) throws -> [URL] {
+        guard !workVolumes.isEmpty else {
+            throw ArchiveError.commandFailed("Split archive volumes were not created.")
+        }
+        if let beforeCommit, let first = workVolumes.first {
+            try beforeCommit(first)
+        }
+
+        let parent = finalBase.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        let batchID = UUID().uuidString
+
+        var staged: [(partial: URL, final: URL)] = []
+        do {
+            for work in workVolumes {
+                let finalURL = mapWorkVolume(work, workBase: workBase, finalBase: finalBase)
+                let partialURL = parent.appendingPathComponent(
+                    ".ArchivePeek-\(batchID).\(finalURL.lastPathComponent)"
+                )
+                do {
+                    try fileManager.moveItem(at: work, to: partialURL)
+                } catch {
+                    try fileManager.copyItem(at: work, to: partialURL)
+                    try? fileManager.removeItem(at: work)
+                }
+                staged.append((partialURL, finalURL))
+            }
+        } catch {
+            for item in staged {
+                try? fileManager.removeItem(at: item.partial)
+            }
+            throw ArchiveError.commandFailed(
+                "Could not stage split volumes next to \(finalBase.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
+
+        var backups: [(backup: URL, final: URL)] = []
+        var committed: [URL] = []
+        do {
+            for item in staged {
+                if fileManager.fileExists(atPath: item.final.path) {
+                    let backup = parent.appendingPathComponent(
+                        ".ArchivePeek-old-\(batchID).\(item.final.lastPathComponent)"
+                    )
+                    try fileManager.moveItem(at: item.final, to: backup)
+                    backups.append((backup, item.final))
+                }
+                try fileManager.moveItem(at: item.partial, to: item.final)
+                committed.append(item.final)
+            }
+
+            let keep = Set(committed.map { $0.path.lowercased() })
+            if let probe = committed.first,
+               let oldSet = SplitArchive.set(for: probe, fileManager: fileManager) {
+                for old in oldSet.volumes where !keep.contains(old.path.lowercased()) {
+                    try? fileManager.removeItem(at: old)
+                }
+            }
+            if fileManager.fileExists(atPath: finalBase.path),
+               !keep.contains(finalBase.path.lowercased()) {
+                try? fileManager.removeItem(at: finalBase)
+            }
+            for backup in backups {
+                try? fileManager.removeItem(at: backup.backup)
+            }
+            return committed
+        } catch {
+            for url in committed {
+                try? fileManager.removeItem(at: url)
+            }
+            for backup in backups {
+                try? fileManager.moveItem(at: backup.backup, to: backup.final)
+            }
+            for item in staged {
+                try? fileManager.removeItem(at: item.partial)
+            }
+            throw ArchiveError.commandFailed(
+                "Could not save split volumes next to \(finalBase.lastPathComponent): \(error.localizedDescription)"
+            )
         }
     }
 

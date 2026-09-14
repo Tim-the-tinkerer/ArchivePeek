@@ -11,7 +11,7 @@ enum ArchiveFormatCatalog {
 
     static let sevenZipExtensions: Set<String> = ["7z"]
 
-    static let rarExtensions: Set<String> = ["rar", "r00", "r01"]
+    static let rarExtensions: Set<String> = ["rar", "r00", "r01", "r02"]
 
     static let tarExtensions: Set<String> = ["tar", "tgz", "tbz", "tbz2", "txz", "tar.gz", "tar.bz2", "tar.xz", "tar.zst"]
 
@@ -31,6 +31,8 @@ enum ArchiveFormatCatalog {
     }
 
     static func isArchive(_ url: URL) -> Bool {
+        if SplitArchive.isSplitVolumeName(url.lastPathComponent) { return true }
+        if SplitArchive.set(for: url)?.isMultiVolume == true { return true }
         let ext = normalizedExtension(for: url)
         if allExtensions.contains(ext) { return true }
         if let type = UTType(filenameExtension: ext), type.conforms(to: .zip) {
@@ -41,6 +43,9 @@ enum ArchiveFormatCatalog {
     }
 
     static func formatLabel(for url: URL) -> String {
+        if let split = SplitArchive.set(for: url) {
+            return split.formatLabel
+        }
         let ext = normalizedExtension(for: url)
         if sevenZipExtensions.contains(ext) { return "7z" }
         if rarExtensions.contains(ext) { return "RAR" }
@@ -50,16 +55,23 @@ enum ArchiveFormatCatalog {
         return ext.isEmpty ? "Archive" : ext.uppercased()
     }
 
-    /// ZIP family, 7z, and uncompressed TAR can be updated in place (via a work copy).
+    static func canonicalArchiveURL(for url: URL) -> URL {
+        SplitArchive.canonicalURL(for: url)
+    }
+
+    /// ZIP family and 7z can be updated via a work copy. Uncompressed TAR is excluded:
+    /// 7-Zip cannot update POSIX PAX tars produced by macOS bsdtar (including ArchivePeek).
     static func supportsMutation(_ url: URL) -> Bool {
         mutationFormat(for: url) != nil
     }
 
     static func mutationFormat(for url: URL) -> CompressFormat? {
+        if let split = SplitArchive.set(for: url), split.isMultiVolume || SplitArchive.isSplitVolumeName(url.lastPathComponent) {
+            return nil
+        }
         let ext = normalizedExtension(for: url)
         if zipExtensions.contains(ext) { return .zip }
         if sevenZipExtensions.contains(ext) { return .sevenZip }
-        if ext == "tar" { return .tar }
         return nil
     }
 
@@ -70,6 +82,10 @@ enum ArchiveFormatCatalog {
 
     /// Archive file name without the format suffix (`Report.tar.gz` → `Report`).
     static func displayBasename(for url: URL) -> String {
+        if let split = SplitArchive.set(for: url) {
+            let trimmed = split.displayStem.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            return trimmed.isEmpty ? "Archive" : trimmed
+        }
         let name = url.lastPathComponent
         let ext = normalizedExtension(for: url)
         var base = name
@@ -100,6 +116,7 @@ enum ArchiveFormatCatalog {
     }
 
     static func preferredBackend(for url: URL) -> Backend {
+        if SplitArchive.set(for: url) != nil { return .sevenZip }
         let ext = normalizedExtension(for: url)
         if zipExtensions.contains(ext) { return .zipNative }
         if TarBackend.canHandle(url) { return .tar }

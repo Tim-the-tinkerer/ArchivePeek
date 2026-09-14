@@ -59,6 +59,13 @@ enum ToolLocator {
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
+    /// WinRAR `rar` (create). `unrar` is extract-only and is not used here.
+    static var rarPath: String? {
+        locateSystem(executables: ["rar"])
+    }
+
+    static var isRarAvailable: Bool { rarPath != nil }
+
     static var isSevenZipAvailable: Bool { sevenZipPath != nil }
 
     static var usesBundledSevenZip: Bool {
@@ -90,6 +97,9 @@ enum ToolLocator {
         }
         if hdiutilPath != nil {
             parts.append("hdiutil (system)")
+        }
+        if isRarAvailable {
+            parts.append("rar (system)")
         }
         return parts.joined(separator: " · ")
     }

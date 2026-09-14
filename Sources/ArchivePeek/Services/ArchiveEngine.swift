@@ -77,9 +77,10 @@ enum ArchiveEngine {
             if handle?.wasCancelled == true { throw ArchiveError.cancelled }
             _ = SecurityScopedAccess.activate(accessTokens)
             defer { SecurityScopedAccess.deactivate(accessTokens) }
-            // Only fail when the archive is actually unreadable.
-            try SecurityScopedAccess.validateReadable([url])
-            return try verifyIntegritySynchronously(url: url, password: password, handle: handle)
+            let archive = try resolvedArchiveFile(url)
+            let volumes = SplitArchive.set(for: archive)?.volumes ?? [archive]
+            try SecurityScopedAccess.validateReadable(volumes)
+            return try verifyIntegritySynchronously(url: archive, password: password, handle: handle)
         }.value
     }
 
@@ -90,6 +91,7 @@ enum ArchiveEngine {
         compressionLevel: Int = 5,
         password: String? = nil,
         solidArchive: Bool = false,
+        volumeArgument: String? = nil,
         dmgAppInstallerLayout: Bool = false,
         /// When true, integrity-test the staged archive **before** replacing any existing final file.
         verifyBeforeCommit: Bool = false,
@@ -105,6 +107,7 @@ enum ArchiveEngine {
                 compressionLevel: compressionLevel,
                 password: password,
                 solidArchive: solidArchive,
+                volumeArgument: volumeArgument,
                 dmgAppInstallerLayout: dmgAppInstallerLayout,
                 verifyBeforeCommit: verifyBeforeCommit,
                 accessTokens: accessTokens,
@@ -238,6 +241,7 @@ enum ArchiveEngine {
         compressionLevel: Int,
         password: String?,
         solidArchive: Bool,
+        volumeArgument: String?,
         dmgAppInstallerLayout: Bool,
         verifyBeforeCommit: Bool,
         accessTokens: [SecurityScopedAccess.Token],
@@ -291,20 +295,35 @@ enum ArchiveEngine {
             beforeCommit = nil
         }
 
+        let splitting = volumeArgument != nil
         let noPassword = password == nil || password?.isEmpty == true
         let useDitto = format == .zip
             && noPassword
+            && !splitting
             && workSources.count == 1
             && ToolLocator.dittoPath != nil
         let useNativeZip = format == .zip
             && noPassword
+            && !splitting
             && ToolLocator.zipPath != nil
         let useNativeTar = format.isTarFamily
             && noPassword
             && ToolLocator.bsdtarPath != nil
         let useDmg = format.isDmg && ToolLocator.hdiutilPath != nil
 
-        if useDmg {
+        if format.isRar {
+            try RarCompressBackend.compress(
+                sources: workSources,
+                to: archive,
+                compressionLevel: compressionLevel,
+                password: password,
+                solidArchive: solidArchive,
+                volumeArgument: volumeArgument,
+                handle: handle,
+                beforeCommit: beforeCommit,
+                onProgress: onProgress
+            )
+        } else if useDmg {
             try DmgCompressBackend.compress(
                 sources: workSources,
                 to: archive,
@@ -354,6 +373,7 @@ enum ArchiveEngine {
                 compressionLevel: compressionLevel,
                 password: password,
                 solidArchive: solidArchive,
+                volumeArgument: volumeArgument,
                 handle: handle,
                 beforeCommit: beforeCommit,
                 onProgress: onProgress
@@ -362,29 +382,54 @@ enum ArchiveEngine {
         CompressDiagnostics.log("compress finished successfully")
     }
 
+    private static func resolvedArchiveFile(_ url: URL) throws -> URL {
+        let standardized = url.standardizedFileURL
+        let canonical = ArchiveFormatCatalog.canonicalArchiveURL(for: standardized)
+        if canonical.path.compare(standardized.path, options: [.caseInsensitive, .literal]) != .orderedSame,
+           !FileManager.default.fileExists(atPath: canonical.path) {
+            throw ArchiveError.splitFirstVolumeMissing(canonical.lastPathComponent)
+        }
+        return canonical
+    }
+
+    private static func archiveByteSize(_ url: URL) -> Int64 {
+        if let split = SplitArchive.set(for: url), !split.volumes.isEmpty {
+            return split.volumes.reduce(Int64(0)) { $0 + fileSize($1) }
+        }
+        return fileSize(url)
+    }
+
     private static func verifyIntegritySynchronously(
         url: URL,
         password: String?,
         handle: ProcessRunner.Handle? = nil
     ) throws -> String {
-        guard ArchiveFormatCatalog.isArchive(url) else {
+        let archive = try resolvedArchiveFile(url)
+        guard ArchiveFormatCatalog.isArchive(archive) else {
             throw ArchiveError.unsupportedFormat
         }
         if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
+        if SplitArchive.set(for: archive) != nil {
+            guard ToolLocator.isSevenZipAvailable else {
+                throw ArchiveError.toolUnavailable("7-Zip")
+            }
+            return try SevenZipBackend.verify(at: archive, password: password, handle: handle)
+        }
+
         let noPassword = password == nil || password?.isEmpty == true
-        let ext = ArchiveFormatCatalog.normalizedExtension(for: url)
+        let ext = ArchiveFormatCatalog.normalizedExtension(for: archive)
         let isZip = ArchiveFormatCatalog.zipExtensions.contains(ext)
         let isDmg = ext == "dmg"
 
         if isDmg, ToolLocator.hdiutilPath != nil {
-            return try DmgCompressBackend.verify(at: url, password: password, handle: handle)
+            return try DmgCompressBackend.verify(at: archive, password: password, handle: handle)
         }
 
         if isZip && noPassword, let unzip = ToolLocator.unzipPath {
             let result = try ProcessRunner.run(
                 executable: unzip,
-                arguments: ["-t", url.path],
+                arguments: ["-t", archive.path],
                 handle: handle
             )
             if result.wasCancelled { throw ArchiveError.cancelled }
@@ -400,7 +445,7 @@ enum ArchiveEngine {
         guard ToolLocator.isSevenZipAvailable else {
             throw ArchiveError.toolUnavailable("7-Zip")
         }
-        return try SevenZipBackend.verify(at: url, password: password, handle: handle)
+        return try SevenZipBackend.verify(at: archive, password: password, handle: handle)
     }
 
     private static func listSynchronously(
@@ -408,14 +453,15 @@ enum ArchiveEngine {
         password: String?,
         handle: ProcessRunner.Handle? = nil
     ) throws -> ArchiveListing {
-        guard ArchiveFormatCatalog.isArchive(url) else {
+        let archive = try resolvedArchiveFile(url)
+        guard ArchiveFormatCatalog.isArchive(archive) else {
             throw ArchiveError.unsupportedFormat
         }
         if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
-        let archiveSize = fileSize(url)
-        let format = ArchiveFormatCatalog.formatLabel(for: url)
-        let backend = ArchiveFormatCatalog.preferredBackend(for: url)
+        let archiveSize = archiveByteSize(archive)
+        let format = ArchiveFormatCatalog.formatLabel(for: archive)
+        let backend = ArchiveFormatCatalog.preferredBackend(for: archive)
 
         // Ask for one extra entry so "exactly maxEntries" is not falsely treated as truncated.
         let listLimit = maxEntries + 1
@@ -425,7 +471,7 @@ enum ArchiveEngine {
         switch backend {
         case .zipNative:
             do {
-                entries = try ZipArchiveLister.entries(at: url, maxEntries: listLimit)
+                entries = try ZipArchiveLister.entries(at: archive, maxEntries: listLimit)
                 note = nil
             } catch ArchiveError.passwordRequired {
                 guard let password, !password.isEmpty else { throw ArchiveError.passwordRequired }
@@ -433,7 +479,7 @@ enum ArchiveEngine {
                     throw ArchiveError.toolUnavailable("7-Zip")
                 }
                 entries = try SevenZipBackend.list(
-                    at: url,
+                    at: archive,
                     maxEntries: listLimit,
                     password: password,
                     handle: handle
@@ -444,7 +490,7 @@ enum ArchiveEngine {
                     throw ArchiveError.toolUnavailable("7-Zip")
                 }
                 entries = try SevenZipBackend.list(
-                    at: url,
+                    at: archive,
                     maxEntries: listLimit,
                     password: password,
                     handle: handle
@@ -457,7 +503,7 @@ enum ArchiveEngine {
             } catch {
                 guard ToolLocator.isSevenZipAvailable else { throw error }
                 entries = try SevenZipBackend.list(
-                    at: url,
+                    at: archive,
                     maxEntries: listLimit,
                     password: password,
                     handle: handle
@@ -467,12 +513,12 @@ enum ArchiveEngine {
         case .tar:
             if ToolLocator.bsdtarPath != nil {
                 do {
-                    entries = try TarBackend.list(at: url, maxEntries: listLimit, handle: handle)
+                    entries = try TarBackend.list(at: archive, maxEntries: listLimit, handle: handle)
                     note = nil
                 } catch {
                     guard ToolLocator.isSevenZipAvailable else { throw error }
                     entries = try SevenZipBackend.list(
-                        at: url,
+                        at: archive,
                         maxEntries: listLimit,
                         password: password,
                         handle: handle
@@ -481,7 +527,7 @@ enum ArchiveEngine {
                 }
             } else if ToolLocator.isSevenZipAvailable {
                 entries = try SevenZipBackend.list(
-                    at: url,
+                    at: archive,
                     maxEntries: listLimit,
                     password: password,
                     handle: handle
@@ -495,7 +541,7 @@ enum ArchiveEngine {
                 throw ArchiveError.toolUnavailable("7-Zip")
             }
             entries = try SevenZipBackend.list(
-                at: url,
+                at: archive,
                 maxEntries: listLimit,
                 password: password,
                 handle: handle
@@ -513,14 +559,23 @@ enum ArchiveEngine {
             entry.isDirectory ? partial : partial + max(0, entry.uncompressedSize)
         }
 
+        var listingNote = note
+        if let volumeNote = SplitArchive.set(for: archive)?.volumeNote {
+            if let existing = listingNote, !existing.isEmpty {
+                listingNote = "\(existing) · \(volumeNote)"
+            } else {
+                listingNote = volumeNote
+            }
+        }
+
         return ArchiveListing(
             format: format,
             entries: sorted,
-            archiveURL: url,
+            archiveURL: archive,
             archiveSize: archiveSize,
             totalUncompressedSize: total,
             truncated: truncated,
-            note: note
+            note: listingNote
         )
     }
 
@@ -535,6 +590,7 @@ enum ArchiveEngine {
         guard !entries.isEmpty else { return }
         if handle?.wasCancelled == true { throw ArchiveError.cancelled }
         try PathSafety.validateEntries(entries)
+        let archive = try resolvedArchiveFile(archive)
 
         let backend = ArchiveFormatCatalog.preferredBackend(for: archive)
         switch backend {
@@ -607,32 +663,33 @@ enum ArchiveEngine {
         }
         if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
-        let backend = ArchiveFormatCatalog.preferredBackend(for: archive)
+        let source = listing.archiveURL
+        let backend = ArchiveFormatCatalog.preferredBackend(for: source)
         switch backend {
         case .zipNative:
             if ToolLocator.isSevenZipAvailable {
                 try SevenZipBackend.extractAll(
-                    from: archive,
+                    from: source,
                     to: destination,
                     password: password,
                     handle: handle
                 )
             } else {
-                try extractZipAll(from: archive, to: destination, handle: handle)
+                try extractZipAll(from: source, to: destination, handle: handle)
             }
         case .sevenZip:
             try SevenZipBackend.extractAll(
-                from: archive,
+                from: source,
                 to: destination,
                 password: password,
                 handle: handle
             )
         case .tar:
             if ToolLocator.bsdtarPath != nil {
-                try TarBackend.extractAll(from: archive, to: destination, handle: handle)
+                try TarBackend.extractAll(from: source, to: destination, handle: handle)
             } else {
                 try SevenZipBackend.extractAll(
-                    from: archive,
+                    from: source,
                     to: destination,
                     password: password,
                     handle: handle
@@ -671,6 +728,7 @@ enum ArchiveEngine {
         handle: ProcessRunner.Handle? = nil
     ) throws -> URL {
         if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+        let archive = try resolvedArchiveFile(archive)
         if entry.isDirectory {
             return try extractFolderToTemp(
                 entry: entry,

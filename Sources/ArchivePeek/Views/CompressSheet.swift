@@ -78,6 +78,32 @@ struct CompressSheet: View {
                 }
             }
 
+            if browser.compressFormat.supportsSplitVolumes, !browser.saveAsComicBookZip {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Split into volumes")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Picker("Split into volumes", selection: $browser.compressSplitVolume) {
+                        ForEach(SplitVolumePreset.allCases) { preset in
+                            Text(preset.label).tag(preset)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 180)
+                    if browser.compressSplitVolume.isEnabled {
+                        Text("Writes Name.\(browser.compressFormat.fileExtension).001, .002, … (RAR uses Name.part1.rar). Keep every part in the same folder.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            if browser.compressFormat.isRar, !ToolLocator.isRarAvailable {
+                Text("Creating RAR needs WinRAR’s rar command (brew install --cask rar, or rarlab.com). 7-Zip can still open RAR files.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             if browser.compressFormat.requiresSingleFile {
                 Text("\(browser.compressFormat.label) can only archive a single file.")
                     .font(.caption)
@@ -124,7 +150,8 @@ struct CompressSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(browser.compressSources.isEmpty)
+                .disabled(browser.compressSources.isEmpty
+                    || (browser.compressFormat.isRar && !ToolLocator.isRarAvailable))
             }
         }
         .padding(24)
@@ -142,8 +169,16 @@ struct CompressSheet: View {
             if !format.isZip {
                 browser.compressSaveAsComicBookZip = false
             }
+            if !format.supportsSplitVolumes {
+                browser.compressSplitVolume = .off
+            }
             if !format.supportsPassword {
                 browser.compressPassword = ""
+            }
+        }
+        .onChange(of: browser.compressSaveAsComicBookZip) { enabled in
+            if enabled {
+                browser.compressSplitVolume = .off
             }
         }
         .onChange(of: browser.compressSources.map(\.path)) { _ in

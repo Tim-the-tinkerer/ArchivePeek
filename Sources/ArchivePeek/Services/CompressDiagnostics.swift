@@ -53,6 +53,9 @@ enum CompressDiagnostics {
         if argument.hasPrefix("-p"), argument.count > 2, argument != "-p-" {
             return "-p***"
         }
+        if argument.hasPrefix("-hp"), argument.count > 3 {
+            return "-hp***"
+        }
         // hdiutil stdin is not in argv; still catch long password-looking flags.
         if argument.hasPrefix("--password="), argument.count > "--password=".count {
             return "--password=***"

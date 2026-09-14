@@ -7,6 +7,7 @@ struct ContentView: View {
 
     private var isBusy: Bool {
         browser.isLoading || browser.isCompressing || browser.isPreviewing
+            || browser.showRemoveConfirmation || browser.showAddReplaceConfirmation
     }
 
     var body: some View {

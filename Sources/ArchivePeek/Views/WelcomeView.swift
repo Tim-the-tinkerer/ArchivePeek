@@ -4,7 +4,7 @@ struct WelcomeView: View {
     @EnvironmentObject private var browser: ArchiveBrowserModel
 
     private let formats = [
-        "ZIP", "7z", "RAR", "TAR", "GZ", "BZ2", "XZ",
+        "ZIP", "7z", "RAR", "TAR", "GZ", "BZ2", "XZ", "Split",
         "CAB", "ISO", "CPIO", "DEB", "RPM", "ARJ", "LZH", "WIM", "XAR",
     ]
 

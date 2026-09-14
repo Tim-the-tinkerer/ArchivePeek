@@ -16,6 +16,7 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.archivepeek.archive</string>
+				<string>com.archivepeek.split-volume</string>
 				<string>com.archivepeek.cbz</string>
 				<string>com.archivepeek.diskimage</string>
 			</array>
@@ -34,9 +35,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.28</string>
+	<string>1.0.31</string>
 	<key>CFBundleVersion</key>
-	<string>29</string>
+	<string>32</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSMultipleInstancesProhibited</key>
@@ -103,6 +104,28 @@
 					<string>xz</string>
 					<string>zip</string>
 					<string>zst</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.content</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Split Archive Volume</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.archivepeek.split-volume</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>001</string>
+					<string>002</string>
+					<string>003</string>
+					<string>z01</string>
+					<string>z02</string>
 				</array>
 			</dict>
 		</dict>

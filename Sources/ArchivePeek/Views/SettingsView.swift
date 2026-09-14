@@ -38,7 +38,7 @@ struct SettingsView: View {
                 Toggle("Verify before replacing existing file", isOn: $verifyAfterCompress)
 
                 if compressFormat.wrappedValue.supportsSolidArchive {
-                    Toggle("Solid archive (7z)", isOn: $solidArchive)
+                    Toggle("Solid archive (7z / RAR)", isOn: $solidArchive)
                 }
 
                 if compressFormat.wrappedValue.isZip {
@@ -51,7 +51,7 @@ struct SettingsView: View {
             } header: {
                 Text("Compression")
             } footer: {
-                Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. Comic book ZIP saves a standard ZIP with a .cbz extension. DMG app installer layout is used when compressing .app bundles to DMG.")
+                Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. Comic book ZIP saves a standard ZIP with a .cbz extension. DMG app installer layout is used when compressing .app bundles to DMG. Creating RAR archives requires WinRAR’s rar command; 7-Zip can still open RAR files.")
             }
 
             Section {

@@ -25,6 +25,7 @@ final class ArchiveBrowserModel: ObservableObject {
     @Published var compressDmgAppInstaller = false
     /// When format is ZIP, write a comic-book ZIP (`.cbz`) instead of `.zip`.
     @Published var compressSaveAsComicBookZip = false
+    @Published var compressSplitVolume: SplitVolumePreset = .off
     @Published var verifyAfterCompress = true
     @Published var isCompressing = false
     @Published var compressProgress: Double = 0
@@ -106,6 +107,7 @@ final class ArchiveBrowserModel: ObservableObject {
 
     private var isBusy: Bool {
         isLoading || isCompressing || isPreviewing
+            || showRemoveConfirmation || showAddReplaceConfirmation
     }
 
     func closeArchive() {
@@ -152,7 +154,18 @@ final class ArchiveBrowserModel: ObservableObject {
         releaseSecurityScopedAccess()
 
         let standardized = url.standardizedFileURL
-        archiveURL = standardized
+        let canonical = ArchiveFormatCatalog.canonicalArchiveURL(for: standardized)
+        if canonical.path.compare(standardized.path, options: [.caseInsensitive, .literal]) != .orderedSame,
+           !FileManager.default.fileExists(atPath: canonical.path) {
+            archiveURL = nil
+            listing = nil
+            rebuildFolderIndex()
+            errorMessage = ArchiveError.splitFirstVolumeMissing(canonical.lastPathComponent).localizedDescription
+            statusMessage = "Open the first volume of this split archive."
+            return
+        }
+
+        archiveURL = canonical
         currentPath = ""
         selection.removeAll()
         password = ""
@@ -161,7 +174,8 @@ final class ArchiveBrowserModel: ObservableObject {
         needsPassword = false
         listing = nil
         rebuildFolderIndex()
-        acquireSecurityScopedAccess(for: [standardized], capturedTokens: accessTokens)
+        let volumes = SplitArchive.set(for: canonical)?.volumes ?? [canonical]
+        acquireSecurityScopedAccess(for: volumes, capturedTokens: accessTokens)
         loadArchive()
     }
 
@@ -170,6 +184,16 @@ final class ArchiveBrowserModel: ObservableObject {
         operationHandle?.cancel()
         let handle = ProcessRunner.Handle()
         operationHandle = handle
+        return handle
+    }
+
+    /// Start add/remove. Cancels any in-flight compress or mutation process first.
+    private func beginMutationHandle() -> ProcessRunner.Handle {
+        compressionHandle?.cancel()
+        operationHandle?.cancel()
+        operationGeneration += 1
+        let handle = ProcessRunner.Handle()
+        compressionHandle = handle
         return handle
     }
 
@@ -323,11 +347,23 @@ final class ArchiveBrowserModel: ObservableObject {
     func handleDroppedURLs(_ urls: [URL]) {
         let standardized = urls.map { $0.standardizedFileURL }
         let tokens = SecurityScopedAccess.captureTokens(for: standardized)
-        let archives = standardized.filter { ArchiveFormatCatalog.isArchive($0) }
-        let compressibles = standardized.filter { !ArchiveFormatCatalog.isArchive($0) }
+        let archives = SplitArchive.uniqueCanonicalArchives(
+            from: standardized.filter { ArchiveFormatCatalog.isArchive($0) }
+        )
+        let compressibles = standardized.filter { url in
+            !ArchiveFormatCatalog.isArchive(url)
+        }
 
         if let archive = archives.first {
-            let archiveTokens = tokens.filter { $0.url == archive }
+            let related = Set(
+                standardized
+                    .filter { ArchiveFormatCatalog.isArchive($0) }
+                    .map { ArchiveFormatCatalog.canonicalArchiveURL(for: $0).path.lowercased() }
+            )
+            let archiveTokens = tokens.filter { token in
+                related.contains(ArchiveFormatCatalog.canonicalArchiveURL(for: token.url).path.lowercased())
+                    || token.url.path.compare(archive.path, options: [.caseInsensitive, .literal]) == .orderedSame
+            }
             openArchive(archive, accessTokens: archiveTokens)
             if archives.count > 1 {
                 statusMessage = "Opened \(archive.lastPathComponent). \(archives.count - 1) additional archive(s) were not opened."
@@ -553,6 +589,7 @@ final class ArchiveBrowserModel: ObservableObject {
         let entries = pendingRemoveEntries
         pendingRemoveEntries = []
         guard !entries.isEmpty else { return }
+        guard !isLoading, !isCompressing, !isPreviewing else { return }
         Task { await removeFromOpenArchive(entries) }
     }
 
@@ -562,6 +599,7 @@ final class ArchiveBrowserModel: ObservableObject {
         let tokens = pendingAddTokens
         clearPendingAdd()
         guard !urls.isEmpty else { return }
+        guard !isLoading, !isCompressing, !isPreviewing else { return }
         Task { await addToOpenArchive(urls, tokens: tokens) }
     }
 
@@ -579,6 +617,16 @@ final class ArchiveBrowserModel: ObservableObject {
         if compressFormat.requiresSingleFile && compressSources.count != 1 {
             errorMessage = "\(compressFormat.label) archives can only contain a single file."
             return
+        }
+        if compressFormat.isRar, !ToolLocator.isRarAvailable {
+            errorMessage = ArchiveError.toolUnavailable("RAR").localizedDescription
+            return
+        }
+        if compressSplitVolume.isEnabled, !compressFormat.supportsSplitVolumes {
+            compressSplitVolume = .off
+        }
+        if compressSaveAsComicBookZip {
+            compressSplitVolume = .off
         }
 
         // App installer layout is DMG-only. Ignore a stale true flag on ZIP/7z/etc.
@@ -601,7 +649,11 @@ final class ArchiveBrowserModel: ObservableObject {
         )
         panel.allowedContentTypes = allowedSaveTypes(for: compressFormat, comicBookZip: comicBookZip)
         panel.prompt = "Create"
-        panel.message = "Save the archive outside the folder being compressed (for example, on Desktop)."
+        if compressSplitVolume.isEnabled {
+            panel.message = "Split archives are saved as numbered volumes (Name.7z.001, Name.part1.rar, …) in the same folder. Save outside the folder being compressed."
+        } else {
+            panel.message = "Save the archive outside the folder being compressed (for example, on Desktop)."
+        }
         let format = compressFormat
 
         panel.begin { response in
@@ -613,6 +665,25 @@ final class ArchiveBrowserModel: ObservableObject {
             )
             let destinationTokens = SecurityScopedAccess.captureTokens(for: [destination])
             Task { @MainActor in
+                if self.compressSplitVolume.isEnabled {
+                    let collisions = CompressionSupport.existingSplitDestinations(
+                        for: destination,
+                        format: format
+                    )
+                    if !collisions.isEmpty {
+                        let names = collisions.prefix(6).map(\.lastPathComponent).joined(separator: ", ")
+                        let extra = collisions.count > 6 ? " and \(collisions.count - 6) more" : ""
+                        let alert = NSAlert()
+                        alert.messageText = "Replace existing volumes?"
+                        alert.informativeText = "These files already exist and will be replaced: \(names)\(extra)"
+                        alert.addButton(withTitle: "Replace")
+                        alert.addButton(withTitle: "Cancel")
+                        alert.alertStyle = .warning
+                        if alert.runModal() != .alertFirstButtonReturn {
+                            return
+                        }
+                    }
+                }
                 self.appendCompressTokens(destinationTokens)
                 self.showCompressSheet = false
                 await self.compress(to: destination)
@@ -1081,6 +1152,9 @@ final class ArchiveBrowserModel: ObservableObject {
                 compressionLevel: compressionLevel,
                 password: compressPassword.isEmpty ? nil : compressPassword,
                 solidArchive: compressSolidArchive,
+                volumeArgument: compressFormat.supportsSplitVolumes && !saveAsComicBookZip
+                    ? compressSplitVolume.volumeArgument
+                    : nil,
                 // Never pass installer layout unless format is DMG (flag can linger from Settings).
                 dmgAppInstallerLayout: compressFormat.isDmg && compressDmgAppInstaller,
                 // When enabled, verify the staged sibling **before** replacing any existing file.
@@ -1102,17 +1176,33 @@ final class ArchiveBrowserModel: ObservableObject {
 
             compressProgress = 1
             compressProgressIndeterminate = false
-            if verifyAfterCompress {
-                statusMessage = "Created and verified \(archiveDestination.lastPathComponent)."
-            } else {
-                statusMessage = "Created \(archiveDestination.lastPathComponent)."
-            }
 
             compressSources.removeAll()
             compressPassword = ""
             compressDmgAppInstaller = false
             compressSaveAsComicBookZip = AppSettings.defaultComicBookZip
-            if let created = CompressionSupport.existingArchiveOutput(
+            let splitting = compressFormat.supportsSplitVolumes
+                && !comicBookZip
+                && compressSplitVolume.isEnabled
+            let createdVolumes = splitting
+                ? CompressionSupport.existingSplitDestinations(for: archiveDestination, format: compressFormat)
+                : []
+            let createdName: String
+            if createdVolumes.count > 1 {
+                createdName = "\(createdVolumes[0].lastPathComponent) (\(createdVolumes.count) volumes)"
+            } else if let only = createdVolumes.first {
+                createdName = only.lastPathComponent
+            } else {
+                createdName = archiveDestination.lastPathComponent
+            }
+            if verifyAfterCompress {
+                statusMessage = "Created and verified \(createdName)."
+            } else {
+                statusMessage = "Created \(createdName)."
+            }
+            if !createdVolumes.isEmpty {
+                NSWorkspace.shared.activateFileViewerSelecting(createdVolumes)
+            } else if let created = CompressionSupport.existingArchiveOutput(
                 intended: archiveDestination,
                 format: compressFormat,
                 comicBookZip: comicBookZip
@@ -1156,11 +1246,8 @@ final class ArchiveBrowserModel: ObservableObject {
         capturedTokens: [SecurityScopedAccess.Token] = []
     ) {
         releaseSecurityScopedAccess()
-        if capturedTokens.isEmpty {
-            archiveAccessTokens = SecurityScopedAccess.captureTokens(for: urls)
-        } else {
-            archiveAccessTokens = capturedTokens
-        }
+        archiveAccessTokens = capturedTokens
+        SecurityScopedAccess.retainAccess(to: urls, storage: &archiveAccessTokens)
         SecurityScopedAccess.activate(archiveAccessTokens)
     }
 
@@ -1227,8 +1314,7 @@ final class ArchiveBrowserModel: ObservableObject {
 
         compressGeneration += 1
         let generation = compressGeneration
-        operationHandle?.cancel()
-        operationGeneration += 1
+        let handle = beginMutationHandle()
 
         isCompressing = true
         progressOperationTitle = "Adding Files"
@@ -1237,9 +1323,6 @@ final class ArchiveBrowserModel: ObservableObject {
         compressProgressIndeterminate = true
         errorMessage = nil
         statusMessage = "Adding \(urls.count) item(s) to \(sourceArchive.lastPathComponent)…"
-
-        let handle = ProcessRunner.Handle()
-        compressionHandle = handle
 
         defer {
             if generation == compressGeneration {
@@ -1307,8 +1390,7 @@ final class ArchiveBrowserModel: ObservableObject {
 
         compressGeneration += 1
         let generation = compressGeneration
-        operationHandle?.cancel()
-        operationGeneration += 1
+        let handle = beginMutationHandle()
 
         isCompressing = true
         progressOperationTitle = "Removing Items"
@@ -1317,9 +1399,6 @@ final class ArchiveBrowserModel: ObservableObject {
         compressProgressIndeterminate = true
         errorMessage = nil
         statusMessage = "Removing \(selected.count) item(s) from \(sourceArchive.lastPathComponent)…"
-
-        let handle = ProcessRunner.Handle()
-        compressionHandle = handle
 
         defer {
             if generation == compressGeneration {

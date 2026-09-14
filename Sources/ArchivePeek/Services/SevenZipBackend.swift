@@ -22,6 +22,16 @@ enum SevenZipBackend {
         if isPasswordRelatedFailure(message) {
             return .passwordRequired
         }
+        let lower = message.lowercased()
+        if lower.contains("cannot find volume")
+            || lower.contains("can't find volume")
+            || lower.contains("can not find volume")
+            || lower.contains("unavailable volume")
+            || (lower.contains("missing") && lower.contains("volume")) {
+            return .commandFailed(
+                "This split archive is missing one or more volumes. Keep every part (for example .001, .002) in the same folder as the first volume."
+            )
+        }
         return .commandFailed(message.isEmpty ? fallback : message)
     }
 
@@ -411,6 +421,7 @@ enum SevenZipBackend {
         compressionLevel: Int,
         password: String?,
         solidArchive: Bool = false,
+        volumeArgument: String? = nil,
         handle: ProcessRunner.Handle? = nil,
         beforeCommit: ((URL) throws -> Void)? = nil,
         onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
@@ -489,6 +500,10 @@ enum SevenZipBackend {
             arguments.append(solidArchive ? "-ms=on" : "-ms=off")
         }
 
+        if let volumeArgument, !volumeArgument.isEmpty {
+            arguments.append("-v\(volumeArgument)")
+        }
+
         if let password, !password.isEmpty, format.supportsPassword {
             arguments.append("-p\(password)")
             if format == .sevenZip {
@@ -544,6 +559,31 @@ enum SevenZipBackend {
             throw ArchiveError.commandFailed(message.isEmpty ? "7-Zip compression failed (exit \(result.exitCode))" : message)
         }
         CompressDiagnostics.log("7zz finished exit=0")
+
+        let workVolumes = CompressionSupport.createdVolumes(fromWorkBase: destination.workURL)
+        let isSplit = volumeArgument != nil && (workVolumes.count > 1
+            || workVolumes.contains { $0.path.lowercased().hasSuffix(".001") })
+
+        if isSplit {
+            guard !workVolumes.isEmpty else {
+                throw ArchiveError.commandFailed("Split archive volumes were not created.")
+            }
+            CompressDiagnostics.log("committing \(workVolumes.count) split volume(s) next to \(destination.finalURL.lastPathComponent)")
+            onProgress?(CompressionProgressUpdate(fraction: 0.98, message: "Saving volumes…", indeterminate: true))
+            let committed = try CompressionSupport.finalizeSplitVolumes(
+                workBase: destination.workURL,
+                workVolumes: workVolumes,
+                finalBase: destination.finalURL,
+                beforeCommit: beforeCommit
+            )
+            didFinalize = true
+            CompressDiagnostics.log("split archive saved")
+            onProgress?(CompressionProgressUpdate(fraction: 1.0, message: "Finishing…", indeterminate: false))
+            guard !committed.isEmpty else {
+                throw ArchiveError.commandFailed("Split archive was not saved to the chosen location.")
+            }
+            return
+        }
 
         let createdWorkURL = CompressionSupport.existingArchiveOutput(
             intended: destination.workURL,

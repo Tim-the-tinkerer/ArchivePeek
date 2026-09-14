@@ -2,11 +2,35 @@
 
 All notable changes to ArchivePeek are documented in this file.
 
+## [1.0.31] — 2026-09-14
+
+### Added
+- **Create split archives** — Compress sheet **Split into volumes** for ZIP, 7z, and RAR (1 MB through 4 GB). Writes `Name.7z.001` / `Name.zip.001` or RAR `Name.part1.rar`. Existing files at the destination are replaced only after the new volumes verify.
+- **Create RAR** — new RAR format in Compress. Creating requires WinRAR’s `rar` command (`brew install --cask rar` or rarlab.com). Opening and extracting RAR still uses bundled 7-Zip.
+
+### Fixed
+- **Split create + verify** — volumes are integrity-tested in temp (where names still chain) before replace. A failed commit restores previous files.
+- **Split detect** — a lone `file.001` is not treated as an archive unless the stem is `.7z`/`.zip`/`.rar` or siblings form a set.
+- **Reveal after create** — Finder no longer jumps to leftover `.001` files from an earlier split.
+- **Replace volumes** — Compress asks before overwriting existing `Name.7z.001` / `Name.part1.rar` files.
+
+## [1.0.30] — 2026-09-14
+
+### Added
+- **Split archives** — browse, extract, Quick Look, and verify multi-volume sets: `archive.7z.001` / `.002`, ZIP `archive.zip` + `.z01`, RAR `archive.part1.rar` or `archive.rar` + `.r00`. Opening any part uses the first volume. All parts must stay in the same folder. Split archives cannot be edited in place.
+
+## [1.0.29] — 2026-09-14
+
+### Fixed
+- **TAR add/remove disabled** — 7-Zip cannot update POSIX PAX tars produced by macOS `bsdtar` (including archives ArchivePeek creates). TAR is browse/extract only; add and remove apply to ZIP (including CBZ) and 7z.
+- **Overlapping add/remove** — a replace/remove confirmation blocks other mutations; starting add or remove cancels any in-flight compress/update process so two edits cannot clobber each other.
+- **Manual checklist version** — expects 1.0.29.
+
 ## [1.0.28] — 2026-09-14
 
 ### Added
 - **Extract All to Folder** — unpacks the open archive into a new folder named after the archive, inside a location you choose (if that name exists, ArchivePeek uses `Name 2`, `Name 3`, …).
-- **Add files to an open archive** — plus-icon **Add Files**, or drop files and folders onto the window while browsing. Items go into the current folder. ZIP (including CBZ), 7z, and uncompressed TAR only.
+- **Add files to an open archive** — plus-icon **Add Files**, or drop files and folders onto the window while browsing. Items go into the current folder. ZIP (including CBZ) and 7z only.
 - **Remove files from an open archive** — trash-icon **Remove**, right-click **Remove from Archive**, or Delete. Confirms first. The original archive is replaced only after the change is written and verified.
 
 ### Changed
@@ -16,7 +40,8 @@ All notable changes to ArchivePeek are documented in this file.
 - **Build ArchivePeek.command uses Xcode** — the builder now prefers `/Applications/Xcode.app` instead of Command Line Tools, which cannot compile SwiftUI `@State` macros.
 
 ### Notes
-- RAR, DMG, ISO, compressed TAR (`.tar.gz` and similar), and single-file GZIP/BZIP2/XZ archives cannot be edited; extract and create a new archive instead.
+- RAR, TAR, DMG, ISO, compressed TAR (`.tar.gz` and similar), and single-file GZIP/BZIP2/XZ archives cannot be edited; extract and create a new archive instead.
+
 ## [1.0.27] — 2026-08-09
 
 ### Fixed

@@ -15,12 +15,16 @@ enum ArchiveError: LocalizedError {
     case duplicateSourceNames([String])
     case cannotModifyArchive(String)
     case archiveInsideSources
+    case splitFirstVolumeMissing(String)
 
     var errorDescription: String? {
         switch self {
         case .unsupportedFormat:
             return "Unsupported archive format."
         case .toolUnavailable(let tool):
+            if tool == "RAR" {
+                return "Creating RAR archives needs WinRAR’s rar command. Install it from rarlab.com or: brew install --cask rar. 7-Zip can still open and extract RAR files."
+            }
             return "\(tool) is not available. Install with: brew install sevenzip"
         case .commandFailed(let message):
             return message
@@ -48,6 +52,8 @@ enum ArchiveError: LocalizedError {
             return message
         case .archiveInsideSources:
             return "Cannot add a folder that contains the open archive. Choose a different item."
+        case .splitFirstVolumeMissing(let name):
+            return "This is part of a split archive. Open the first volume (“\(name)”) and keep all parts in the same folder."
         }
     }
 }

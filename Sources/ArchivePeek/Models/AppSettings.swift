@@ -72,5 +72,6 @@ enum AppSettings {
         // (That used to block Create Archive with a misleading installer/.app error.)
         browser.compressDmgAppInstaller = defaultDmgAppInstaller && defaultCompressFormat.isDmg
         browser.compressSaveAsComicBookZip = defaultComicBookZip && defaultCompressFormat.isZip
+        browser.compressSplitVolume = .off
     }
 }
