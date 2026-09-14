@@ -17,7 +17,6 @@ All notable changes to ArchivePeek are documented in this file.
 
 ### Notes
 - RAR, DMG, ISO, compressed TAR (`.tar.gz` and similar), and single-file GZIP/BZIP2/XZ archives cannot be edited; extract and create a new archive instead.
-
 ## [1.0.27] — 2026-08-09
 
 ### Fixed
