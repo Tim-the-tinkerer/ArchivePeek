@@ -2,6 +2,21 @@
 
 All notable changes to ArchivePeek are documented in this file.
 
+## [1.0.33] — 2026-09-15
+
+### Fixed
+- **Finder Extract Here / Create Archive from a cold start** — choosing the command when ArchivePeek was not already open launched the app but dropped the files. The action now waits until the window is ready, then extracts or compresses.
+- **Finder Services registration** — empty `NSRequiredContext` and `NSSendTypes` so items appear for real Finder files (not only selected path text). File lists are read from the pasteboard before the grant expires.
+- **Finder Quick Actions** — enabling the setting installs working Automator workflows (`Extract Here` / `Create Archive`) that call ArchivePeek via the `archivepeek://` URL scheme.
+
+## [1.0.32] — 2026-09-14
+
+### Added
+- **Finder contextual menu** — Settings → Finder → **Show in Finder contextual menu** enables **ArchivePeek: Extract Here** and **ArchivePeek: Create Archive**. They appear under Finder **Services** / **Quick Actions**. Extract unpacks into a folder next to the archive. Create uses your default format. Encrypted archives prompt for a password, then continue extracting.
+
+### Fixed
+- **Finder Extract Here / Create Archive did nothing** — Finder file lists were dropped, the service provider was registered too late, and the file-access grant expired before work started.
+
 ## [1.0.31] — 2026-09-14
 
 ### Added

@@ -8,6 +8,7 @@ enum AppSettings {
         static let solidArchive = "defaultSolidArchive"
         static let dmgAppInstaller = "defaultDmgAppInstaller"
         static let comicBookZip = "defaultComicBookZip"
+        static let finderContextMenu = "finderContextMenu"
     }
 
     private static let store = UserDefaults.standard
@@ -60,6 +61,11 @@ enum AppSettings {
     static var defaultComicBookZip: Bool {
         get { store.bool(forKey: Keys.comicBookZip) }
         set { store.set(newValue, forKey: Keys.comicBookZip) }
+    }
+
+    static var finderContextMenuEnabled: Bool {
+        get { store.bool(forKey: Keys.finderContextMenu) }
+        set { store.set(newValue, forKey: Keys.finderContextMenu) }
     }
 
     @MainActor

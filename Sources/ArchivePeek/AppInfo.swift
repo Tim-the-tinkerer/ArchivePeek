@@ -9,11 +9,11 @@ enum AppInfo {
     static let githubLatestReleaseAPIURL = URL(string: "https://api.github.com/repos/Tim-the-tinkerer/ArchivePeek/releases/latest")!
 
     static var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.31"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.33"
     }
 
     static var build: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "32"
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "34"
     }
 
     static var versionLabel: String {

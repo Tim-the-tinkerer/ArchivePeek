@@ -96,6 +96,9 @@ struct HelpView: View {
                         helpBullet("Defaults include format, compression level, verify before replace, solid 7z, comic book ZIP (.cbz), and DMG app installer layout.")
                         helpBullet("Defaults are applied each time you open the Compress sheet.")
                         helpBullet("Use **Set ArchivePeek as Default for Archives** to make ArchivePeek the default app for ZIP, 7z, TAR, RAR, and similar archives. DMG and ISO are excluded.")
+                        helpBullet("Turn on **Show in Finder contextual menu**, then quit and reopen ArchivePeek. Right-click in Finder and look under **Services** or **Quick Actions** for **ArchivePeek: Extract Here** and **ArchivePeek: Create Archive** (Quick Actions may say **Extract Here** / **Create Archive**).")
+                        helpBullet("**Extract Here** unpacks into a folder next to the archive. **Create Archive** uses your default format and saves next to the selected items. Encrypted archives prompt for a password, then continue.")
+                        helpBullet("If the commands are missing, use **Open Keyboard Shortcuts…** in Settings and enable them under Services → Files and Folders.")
                     }
 
                     helpSection("Updates", icon: "arrow.down.circle") {

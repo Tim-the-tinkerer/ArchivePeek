@@ -56,6 +56,7 @@ final class ArchiveBrowserModel: ObservableObject {
     private var dragOutHandles: [String: ProcessRunner.Handle] = [:]
     private var compressAccessTokens: [SecurityScopedAccess.Token] = []
     private var compressGeneration = 0
+    private var pendingFinderExtract = false
     private var pendingAddURLs: [URL] = []
     private var pendingAddTokens: [SecurityScopedAccess.Token] = []
     private var pendingRemoveEntries: [ArchiveEntry] = []
@@ -136,6 +137,7 @@ final class ArchiveBrowserModel: ObservableObject {
         isLoading = false
         showRemoveConfirmation = false
         showAddReplaceConfirmation = false
+        pendingFinderExtract = false
         pendingRemoveEntries = []
         clearPendingAdd()
 
@@ -241,6 +243,12 @@ final class ArchiveBrowserModel: ObservableObject {
                 needsPassword = false
                 passwordErrorMessage = nil
                 statusMessage = result.summary
+                if pendingFinderExtract {
+                    pendingFinderExtract = false
+                    let parent = requestURL.deletingLastPathComponent()
+                    let tokens = SecurityScopedAccess.captureTokens(for: [parent])
+                    await self.extractAllToNamedFolder(in: parent, destinationTokens: tokens)
+                }
             } catch ArchiveError.cancelled {
                 guard generation == loadGeneration else { return }
                 // Superseded by a newer load or close — leave UI to the new operation.
@@ -341,6 +349,123 @@ final class ArchiveBrowserModel: ObservableObject {
         guard archiveURL != nil else { return }
         chooseDestination { destination, tokens in
             Task { await self.extractAllToNamedFolder(in: destination, destinationTokens: tokens) }
+        }
+    }
+
+    func handleFinderExtract(_ urls: [URL], tokens: [SecurityScopedAccess.Token] = []) {
+        FinderServices.log("handleFinderExtract \(urls.map(\.path).joined(separator: ", "))")
+        let archives = SplitArchive.uniqueCanonicalArchives(
+            from: urls.map(\.standardizedFileURL).filter { ArchiveFormatCatalog.isArchive($0) }
+        )
+        guard !archives.isEmpty else {
+            errorMessage = urls.isEmpty
+                ? "Finder did not send any files. Try the command again, or drag the archive onto ArchivePeek."
+                : "“\(urls[0].lastPathComponent)” is not a recognized archive. Use Extract Here on a ZIP, 7z, RAR, TAR, or similar file."
+            return
+        }
+        appendCompressTokens(tokens)
+        Task { await extractFinderArchives(archives, extraTokens: tokens) }
+    }
+
+    func handleFinderCreate(_ urls: [URL], tokens: [SecurityScopedAccess.Token] = []) {
+        FinderServices.log("handleFinderCreate \(urls.map(\.path).joined(separator: ", "))")
+        let items = urls.map(\.standardizedFileURL).filter { url in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        }
+        guard !items.isEmpty else {
+            errorMessage = urls.isEmpty
+                ? "Finder did not send any files. Try the command again, or drag items onto ArchivePeek."
+                : "Could not read the selected items."
+            return
+        }
+        AppSettings.applyCompressionDefaults(to: self)
+        if compressFormat.isRar, !ToolLocator.isRarAvailable {
+            compressFormat = .zip
+        }
+        compressSplitVolume = .off
+        showCompressSheet = false
+        compressSources = items
+        appendCompressTokens(tokens)
+        if tokens.isEmpty {
+            appendCompressTokens(SecurityScopedAccess.captureTokens(for: items))
+        }
+
+        let parent: URL
+        if items.count == 1 {
+            parent = items[0].deletingLastPathComponent()
+        } else {
+            parent = items[0].deletingLastPathComponent()
+        }
+        let proposed = CompressionSupport.proposedArchiveName(
+            for: items,
+            format: compressFormat,
+            comicBookZip: saveAsComicBookZip
+        )
+        let destination = CompressionSupport.uniqueArchiveURL(proposedName: proposed, in: parent)
+        retainCompressAccess(for: destination.deletingLastPathComponent())
+        Task { await compress(to: destination) }
+    }
+
+    private func extractFinderArchives(
+        _ archives: [URL],
+        extraTokens: [SecurityScopedAccess.Token]
+    ) async {
+        var revealed: [URL] = []
+        for archive in archives {
+            let source = ArchiveFormatCatalog.canonicalArchiveURL(for: archive)
+            let parent = source.deletingLastPathComponent()
+            var tokens = extraTokens
+            tokens.append(contentsOf: SecurityScopedAccess.captureTokens(for: [source, parent]))
+            _ = SecurityScopedAccess.activate(tokens)
+            defer { SecurityScopedAccess.releaseAll(&tokens) }
+
+            let folder = PathSafety.uniqueChildDirectory(
+                named: ArchiveFormatCatalog.displayBasename(for: source),
+                in: parent
+            )
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            } catch {
+                errorMessage = "Could not create folder “\(folder.lastPathComponent)”: \(error.localizedDescription)"
+                statusMessage = "Extraction failed."
+                return
+            }
+
+            let handle = beginOperationHandle()
+            isLoading = true
+            statusMessage = "Extracting \(source.lastPathComponent)…"
+            do {
+                try await ArchiveEngine.extractAll(
+                    from: source,
+                    to: folder,
+                    password: nil,
+                    handle: handle
+                )
+                isLoading = false
+                revealed.append(folder)
+            } catch ArchiveError.passwordRequired {
+                isLoading = false
+                pendingFinderExtract = true
+                openArchive(source, accessTokens: SecurityScopedAccess.captureTokens(for: [source]))
+                statusMessage = "Enter the password, then extraction continues."
+                return
+            } catch ArchiveError.cancelled {
+                isLoading = false
+                statusMessage = "Extraction cancelled."
+                return
+            } catch {
+                isLoading = false
+                errorMessage = error.localizedDescription
+                statusMessage = "Extraction failed."
+                return
+            }
+        }
+        if !revealed.isEmpty {
+            statusMessage = revealed.count == 1
+                ? "Extracted to \(revealed[0].path)."
+                : "Extracted \(revealed.count) archives."
+            NSWorkspace.shared.activateFileViewerSelecting(revealed)
         }
     }
 

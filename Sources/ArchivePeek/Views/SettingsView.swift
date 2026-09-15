@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
@@ -7,10 +8,18 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Keys.solidArchive) private var solidArchive = false
     @AppStorage(AppSettings.Keys.dmgAppInstaller) private var dmgAppInstaller = false
     @AppStorage(AppSettings.Keys.comicBookZip) private var comicBookZip = false
+    @AppStorage(AppSettings.Keys.finderContextMenu) private var finderContextMenuEnabled = false
 
     @State private var defaultAppSummary = ""
     @State private var defaultAppMessage: String?
     @State private var isSettingDefaultApp = false
+
+    private var finderContextMenu: Binding<Bool> {
+        Binding(
+            get: { finderContextMenuEnabled },
+            set: { finderContextMenuEnabled = $0 }
+        )
+    }
 
     private var compressFormat: Binding<CompressFormat> {
         Binding(
@@ -52,6 +61,21 @@ struct SettingsView: View {
                 Text("Compression")
             } footer: {
                 Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. Comic book ZIP saves a standard ZIP with a .cbz extension. DMG app installer layout is used when compressing .app bundles to DMG. Creating RAR archives requires WinRAR’s rar command; 7-Zip can still open RAR files.")
+            }
+
+            Section {
+                Toggle("Show in Finder contextual menu", isOn: finderContextMenu)
+                    .onChange(of: finderContextMenuEnabled) { enabled in
+                        FinderServices.setContextMenuEnabled(enabled)
+                    }
+
+                Button("Open Keyboard Shortcuts…") {
+                    openServicesSettings()
+                }
+            } header: {
+                Text("Finder")
+            } footer: {
+                Text("Adds ArchivePeek: Extract Here and ArchivePeek: Create Archive to Finder. Look under Services or Quick Actions in the right-click menu (macOS often nests them there). Extract unpacks into a folder next to the archive. Create uses your default format. After turning this on, relaunch ArchivePeek and right-click a file again. If the items are missing, use Open Keyboard Shortcuts… and enable them under Services → Files and Folders.")
             }
 
             Section {
@@ -105,7 +129,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(minWidth: 520, idealWidth: 520, maxWidth: 520)
-        .frame(minHeight: 680, idealHeight: 680, maxHeight: 680)
+        .frame(minHeight: 780, idealHeight: 780, maxHeight: 780)
         .onAppear {
             refreshDefaultAppStatus()
         }
@@ -129,5 +153,17 @@ struct SettingsView: View {
         }
 
         isSettingDefaultApp = false
+    }
+
+    private func openServicesSettings() {
+        let urls = [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?Services",
+            "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts",
+        ]
+        for raw in urls {
+            if let url = URL(string: raw), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
     }
 }

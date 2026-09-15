@@ -2,7 +2,7 @@
 
 A native macOS app for browsing archive contents without extracting everything first, and for creating new archives quickly.
 
-**Version 1.0.31** · macOS 13.0 or later
+**Version 1.0.33** · macOS 13.0 or later
 
 **Source & updates:** [github.com/Tim-the-tinkerer/ArchivePeek](https://github.com/Tim-the-tinkerer/ArchivePeek) — use **ArchivePeek → Check for Updates…** in the app.
 
@@ -21,7 +21,7 @@ A native macOS app for browsing archive contents without extracting everything f
 - **Solid 7z** option for stronger compression on large file sets
 - **Fast paths** using native macOS `zip`, `ditto`, and `bsdtar` where possible
 - **Clean archives** — excludes only macOS junk (`.DS_Store`, AppleDouble `._*`, `__MACOSX`); keeps `.gitignore`, `.git`, and other project files
-- **Settings** — default compression format, level, verify-after-create, comic book ZIP, and optional “make default app” for archives
+- **Settings** — default compression format, level, verify-after-create, comic book ZIP, Finder contextual menu (Extract Here / Create Archive), and optional “make default app” for archives
 
 ## Getting Started
 
@@ -51,6 +51,8 @@ Or double-click `Build ArchivePeek.command` in Finder.
 | Verify archive | Shield icon in the toolbar (hover icons for labels) |
 | Create archive | **Compress** (⇧⌘N) or drag files/folders onto the window |
 | Settings | **ArchivePeek → Settings…** (⌘,) |
+| Finder Extract Here | Settings → **Show in Finder contextual menu**, then right-click an archive → **Services** or **Quick Actions** → **ArchivePeek: Extract Here** (or **Extract Here**) |
+| Finder Create Archive | Same setting, then right-click files or folders → **ArchivePeek: Create Archive** (or **Create Archive**) |
 | Help | **Help → ArchivePeek Help** (⌘?) |
 
 Toolbar buttons are icon-only — hover any icon to see its name.
@@ -66,6 +68,8 @@ Open **ArchivePeek → Settings…** (⌘,) to set defaults applied whenever you
 - DMG app installer layout (on/off)
 
 Use **Set ArchivePeek as Default for Archives** to register ArchivePeek as the system default for ZIP, 7z, TAR, RAR, and similar archives. DMG and ISO are excluded (Disk Utility or Finder remain the usual handlers). macOS asks for a single confirmation.
+
+Turn on **Show in Finder contextual menu** for one-click **Extract Here** and **Create Archive**. After enabling, quit and reopen ArchivePeek, then right-click in Finder. macOS usually lists the commands under **Services** or **Quick Actions**. Extract unpacks into a folder next to the archive. Create uses your default format and saves next to the selection. If the items are missing, Settings → **Open Keyboard Shortcuts…** → Services → Files and Folders.
 
 ## Compression notes
 

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import QuickLookUI
 import SwiftUI
 
@@ -36,25 +37,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowCloseObserver: NSObjectProtocol?
     private var isReadyToQuitOnWindowClose = false
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.servicesProvider = self
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Keep Launch Services UTI bindings (e.g. com.archivepeek.cbz) current so
         // document icons do not stick on an older ArchivePeek.app registration.
         DefaultAppRegistration.registerBundleWithLaunchServices()
+        NSApp.servicesProvider = self
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+        NSUpdateDynamicServices()
+        FinderServices.applyPreference()
         DispatchQueue.main.async { [weak self] in
             self?.isReadyToQuitOnWindowClose = true
         }
     }
 
+    @objc func extractHere(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>?
+    ) {
+        FinderServices.shared.extractHere(pboard, userData: userData, error: error)
+    }
+
+    @objc func createArchive(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>?
+    ) {
+        FinderServices.shared.createArchive(pboard, userData: userData, error: error)
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        if FinderServices.shared.hasPendingWork { return false }
+        if browser?.isCompressing == true || browser?.isLoading == true { return false }
+        return true
+    }
+
+    @objc private func handleGetURLEvent(
+        _ event: NSAppleEventDescriptor,
+        withReplyEvent replyEvent: NSAppleEventDescriptor
+    ) {
+        guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: string) else { return }
+        FinderServices.log("getURL \(string)")
+        _ = FinderServices.shared.handleActionURL(url)
     }
 
     func setBrowser(_ browser: ArchiveBrowserModel) {
         self.browser = browser
         refreshWindowDropHandling()
+        FinderServices.shared.onExtract = { [weak self] urls, tokens in
+            self?.activateMainWindow()
+            browser.handleFinderExtract(urls, tokens: tokens)
+        }
+        FinderServices.shared.onCreate = { [weak self] urls, tokens in
+            self?.activateMainWindow()
+            browser.handleFinderCreate(urls, tokens: tokens)
+        }
         if let url = pendingOpenURL {
             pendingOpenURL = nil
             openArchive(url, in: browser)
+        }
+        drainPendingFinderActions(using: browser)
+        DispatchQueue.main.async { [weak self] in
+            self?.drainPendingFinderActions(using: browser)
+        }
+    }
+
+    private func drainPendingFinderActions(using browser: ArchiveBrowserModel) {
+        if let pending = FinderServices.shared.takePendingExtract() {
+            FinderServices.log("drain pending extract")
+            activateMainWindow()
+            browser.handleFinderExtract(pending.urls, tokens: pending.tokens)
+        }
+        if let pending = FinderServices.shared.takePendingCreate() {
+            FinderServices.log("drain pending create")
+            activateMainWindow()
+            browser.handleFinderCreate(pending.urls, tokens: pending.tokens)
         }
     }
 
@@ -86,6 +159,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func quitIfMainWindowClosed() {
         guard isReadyToQuitOnWindowClose else { return }
+        if FinderServices.shared.hasPendingWork { return }
+        if browser?.isCompressing == true || browser?.isLoading == true { return }
         NSApp.terminate(nil)
     }
 
@@ -102,12 +177,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    func handleExternalWindowValue(_ value: String) {
+        guard let url = URL(string: value), url.scheme?.lowercased() == FinderServices.urlScheme else {
+            return
+        }
+        FinderServices.log("WindowGroup value \(value)")
+        _ = FinderServices.shared.handleActionURL(url)
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard let url = urls.first else { return }
-        if let browser {
-            openArchive(url, in: browser)
-        } else {
-            pendingOpenURL = url
+        FinderServices.log("application open \(urls.map(\.absoluteString).joined(separator: ", "))")
+        var archives: [URL] = []
+        for url in urls {
+            if FinderServices.shared.handleActionURL(url) {
+                continue
+            }
+            archives.append(url)
+        }
+        if let url = archives.first {
+            if let browser {
+                openArchive(url, in: browser)
+            } else {
+                pendingOpenURL = url
+            }
         }
     }
 
@@ -190,13 +282,21 @@ struct ArchivePeekApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("ArchivePeek", id: AppWindowID.main, for: String.self) { _ in
+        WindowGroup("ArchivePeek", id: AppWindowID.main, for: String.self) { $externalValue in
             ContentView()
                 .environmentObject(browser)
                 .frame(minWidth: 720, minHeight: 480)
                 .background(MainWindowAccessor { appDelegate.registerMainWindow($0) })
                 .onAppear {
                     appDelegate.setBrowser(browser)
+                    appDelegate.handleExternalWindowValue(externalValue)
+                }
+                .onChange(of: externalValue) { newValue in
+                    appDelegate.handleExternalWindowValue(newValue)
+                }
+                .onOpenURL { url in
+                    FinderServices.log("onOpenURL \(url.absoluteString)")
+                    _ = FinderServices.shared.handleActionURL(url)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     browser.cleanupOnTermination()
