@@ -7,7 +7,7 @@ struct CompressionProgressOverlay: View {
         ZStack {
             Color.black.opacity(0.20)
                 .ignoresSafeArea()
-                .allowsHitTesting(false)
+                .contentShape(Rectangle())
 
             VStack(alignment: .leading, spacing: 16) {
                 HStack {

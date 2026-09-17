@@ -61,6 +61,38 @@ enum PathSafety {
         }
     }
 
+    /// After extract, remove link members that resolve outside `destination`.
+    static func enforceExtractContainment(
+        in destination: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let base = destination.resolvingSymlinksInPath().standardizedFileURL
+        let basePath = base.path
+        guard let enumerator = fileManager.enumerator(
+            at: destination,
+            includingPropertiesForKeys: [.isSymbolicLinkKey],
+            options: [.skipsPackageDescendants]
+        ) else { return }
+
+        var escaped: [URL] = []
+        for case let url as URL in enumerator {
+            let isLink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+            let resolved = isLink
+                ? url.resolvingSymlinksInPath().standardizedFileURL
+                : url.standardizedFileURL
+            if resolved.path == basePath || resolved.path.hasPrefix(basePath + "/") {
+                continue
+            }
+            escaped.append(url)
+        }
+        for url in escaped {
+            try? fileManager.removeItem(at: url)
+        }
+        if !escaped.isEmpty {
+            throw ArchiveError.invalidEntryPath(escaped[0].lastPathComponent)
+        }
+    }
+
     /// Next unused directory `parent/base`, then `parent/base 2`, …
     static func uniqueChildDirectory(
         named base: String,

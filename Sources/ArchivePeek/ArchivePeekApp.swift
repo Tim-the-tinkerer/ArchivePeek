@@ -82,9 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        if FinderServices.shared.hasPendingWork { return false }
-        if browser?.isCompressing == true || browser?.isLoading == true { return false }
-        return true
+        true
     }
 
     @objc private func handleGetURLEvent(
@@ -159,8 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func quitIfMainWindowClosed() {
         guard isReadyToQuitOnWindowClose else { return }
-        if FinderServices.shared.hasPendingWork { return }
-        if browser?.isCompressing == true || browser?.isLoading == true { return }
+        browser?.cleanupOnTermination()
         NSApp.terminate(nil)
     }
 
@@ -178,11 +175,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func handleExternalWindowValue(_ value: String) {
-        guard let url = URL(string: value), url.scheme?.lowercased() == FinderServices.urlScheme else {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != AppWindowID.main else { return }
+        if let url = URL(string: trimmed), url.scheme?.lowercased() == FinderServices.urlScheme {
+            FinderServices.log("WindowGroup action \(trimmed)")
+            _ = FinderServices.shared.handleActionURL(url)
             return
         }
-        FinderServices.log("WindowGroup value \(value)")
-        _ = FinderServices.shared.handleActionURL(url)
+        if let fileURL = fileURL(fromExternalValue: trimmed) {
+            FinderServices.log("WindowGroup file \(fileURL.path)")
+            openFileFromFinder(fileURL)
+        }
+    }
+
+    func openFileFromFinder(_ url: URL) {
+        if url.scheme?.lowercased() == FinderServices.urlScheme {
+            _ = FinderServices.shared.handleActionURL(url)
+            return
+        }
+        let fileURL = url.isFileURL ? url : URL(fileURLWithPath: url.path)
+        if let browser {
+            openArchive(fileURL, in: browser)
+        } else {
+            pendingOpenURL = fileURL.standardizedFileURL
+        }
+    }
+
+    private func fileURL(fromExternalValue value: String) -> URL? {
+        if let url = URL(string: value), url.isFileURL {
+            return url.standardizedFileURL
+        }
+        if value.hasPrefix("/") {
+            let url = URL(fileURLWithPath: value)
+            return FileManager.default.fileExists(atPath: url.path) ? url.standardizedFileURL : nil
+        }
+        return nil
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -195,11 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             archives.append(url)
         }
         if let url = archives.first {
-            if let browser {
-                openArchive(url, in: browser)
-            } else {
-                pendingOpenURL = url
-            }
+            openFileFromFinder(url)
         }
     }
 
@@ -242,6 +265,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func closeDuplicateWindows() {
         guard let keeper = mainWindow else { return }
         for window in duplicateApplicationWindows(keeping: keeper) {
+            if window.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true {
+                continue
+            }
             window.close()
         }
         keeper.makeKeyAndOrderFront(nil)
@@ -260,8 +286,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func isLikelyArchivePeekContentWindow(_ window: NSWindow) -> Bool {
-        let title = window.title
-        return title.isEmpty || title == "ArchivePeek"
+        window.canBecomeMain &&
+            window.level == .normal &&
+            !window.isSheet &&
+            !(window is NSPanel) &&
+            window.styleMask.contains(.titled)
     }
 
     private var mainApplicationWindow: NSWindow? {
@@ -282,29 +311,23 @@ struct ArchivePeekApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("ArchivePeek", id: AppWindowID.main, for: String.self) { $externalValue in
+        WindowGroup("ArchivePeek", id: AppWindowID.main) {
             ContentView()
                 .environmentObject(browser)
                 .frame(minWidth: 720, minHeight: 480)
                 .background(MainWindowAccessor { appDelegate.registerMainWindow($0) })
                 .onAppear {
                     appDelegate.setBrowser(browser)
-                    appDelegate.handleExternalWindowValue(externalValue)
-                }
-                .onChange(of: externalValue) { newValue in
-                    appDelegate.handleExternalWindowValue(newValue)
                 }
                 .onOpenURL { url in
                     FinderServices.log("onOpenURL \(url.absoluteString)")
-                    _ = FinderServices.shared.handleActionURL(url)
+                    appDelegate.openFileFromFinder(url)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     browser.cleanupOnTermination()
                 }
-        } defaultValue: {
-            AppWindowID.main
         }
-        .handlesExternalEvents(matching: Set(arrayLiteral: "*"))
+        .handlesExternalEvents(matching: [AppWindowID.main])
 
         Settings {
             SettingsView()
@@ -320,10 +343,12 @@ struct ArchivePeekApp: App {
                     browser.presentCompressSheet()
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(browser.isCompressing || browser.isLoading)
                 Button("Open Archive…") {
                     openArchivePanel()
                 }
                 .keyboardShortcut("o")
+                .disabled(browser.isCompressing)
                 Button("Close Archive") {
                     browser.closeArchive()
                 }

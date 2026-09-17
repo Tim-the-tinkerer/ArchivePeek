@@ -150,6 +150,7 @@ final class ArchiveBrowserModel: ObservableObject {
         loadHandle?.cancel()
         // Cancel extract/open/verify against the previous archive; loadArchive bumps loadGeneration.
         operationHandle?.cancel()
+        compressionHandle?.cancel()
         operationGeneration += 1
         previewGeneration += 1
         clearDragOutCache()
@@ -306,17 +307,18 @@ final class ArchiveBrowserModel: ObservableObject {
 
     func extractSelected(preservePaths: Bool = false) {
         guard listing != nil else { return }
-        let selectedEntries = selectedFileEntries()
+        let selectedEntries = selectedVisibleEntries().map { canonicalEntry(for: $0) }
         guard !selectedEntries.isEmpty else {
-            errorMessage = "Select one or more files to extract."
+            errorMessage = "Select one or more items to extract."
             return
         }
+        let hasFolders = selectedEntries.contains(where: \.isDirectory)
         chooseDestination { destination, tokens in
             Task {
                 await self.extract(
                     entries: selectedEntries,
                     to: destination,
-                    preservePaths: preservePaths,
+                    preservePaths: preservePaths || hasFolders,
                     destinationTokens: tokens
                 )
             }
@@ -324,7 +326,7 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func extractEntry(_ entry: ArchiveEntry, preservePaths: Bool = false) {
-        guard listing != nil, !entry.isDirectory else { return }
+        guard listing != nil else { return }
         let canonical = canonicalEntry(for: entry)
         chooseDestination { destination, tokens in
             Task {
@@ -402,7 +404,12 @@ final class ArchiveBrowserModel: ObservableObject {
             format: compressFormat,
             comicBookZip: saveAsComicBookZip
         )
-        let destination = CompressionSupport.uniqueArchiveURL(proposedName: proposed, in: parent)
+        let destination = CompressionSupport.uniqueArchiveURL(
+            proposedName: proposed,
+            in: parent,
+            format: compressFormat,
+            comicBookZip: saveAsComicBookZip
+        )
         retainCompressAccess(for: destination.deletingLastPathComponent())
         Task { await compress(to: destination) }
     }
@@ -886,10 +893,11 @@ final class ArchiveBrowserModel: ObservableObject {
                 isLoading = false
             }
         }
-        statusMessage = "Extracting \(entries.count) item(s)..."
+        let expanded = expandEntriesIncludingFolderChildren(entries)
+        statusMessage = "Extracting \(expanded.count) item(s)..."
         do {
             try await ArchiveEngine.extract(
-                entries: entries,
+                entries: expanded,
                 from: sourceArchive,
                 to: destination,
                 preservePaths: preservePaths,
@@ -1189,6 +1197,28 @@ final class ArchiveBrowserModel: ObservableObject {
         }
     }
 
+    private func expandEntriesIncludingFolderChildren(_ entries: [ArchiveEntry]) -> [ArchiveEntry] {
+        guard let listing else { return entries }
+        var seen = Set<String>()
+        var result: [ArchiveEntry] = []
+        func include(_ entry: ArchiveEntry) {
+            let key = entry.normalizedPath.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            if seen.insert(key).inserted {
+                result.append(entry)
+            }
+        }
+        for entry in entries {
+            let canonical = canonicalEntry(for: entry)
+            include(canonical)
+            guard canonical.isDirectory else { continue }
+            let prefix = canonical.normalizedPath + "/"
+            for child in listing.entries where child.normalizedPath.hasPrefix(prefix) {
+                include(child)
+            }
+        }
+        return result
+    }
+
     private func selectedFileEntries() -> [ArchiveEntry] {
         selectedVisibleEntries()
             .filter { !$0.isDirectory }
@@ -1238,7 +1268,9 @@ final class ArchiveBrowserModel: ObservableObject {
         guard !sourceURLs.isEmpty else { return }
 
         let accessTokens = compressAccessTokens
+        compressGeneration += 1
         let generation = compressGeneration
+        compressionHandle?.cancel()
 
         let comicBookZip = saveAsComicBookZip
         let archiveDestination = CompressionSupport.normalizedArchiveURL(
@@ -1259,9 +1291,11 @@ final class ArchiveBrowserModel: ObservableObject {
         compressionHandle = handle
 
         defer {
-            isCompressing = false
-            compressionHandle = nil
-            releaseCompressAccess()
+            if generation == compressGeneration {
+                isCompressing = false
+                compressionHandle = nil
+                releaseCompressAccess()
+            }
         }
 
         do {

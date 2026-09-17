@@ -15,6 +15,9 @@ final class FinderServices: NSObject {
 
     private var pendingExtract: (urls: [URL], tokens: [SecurityScopedAccess.Token])?
     private var pendingCreate: (urls: [URL], tokens: [SecurityScopedAccess.Token])?
+    private var lastActionKey: String?
+    private var lastActionAt: Date?
+    private var deliverGeneration = 0
 
     var hasPendingWork: Bool {
         pendingExtract != nil || pendingCreate != nil
@@ -63,16 +66,24 @@ final class FinderServices: NSObject {
         Self.log("parsed \(files.count) path(s): \(files.map(\.path).joined(separator: ", "))")
         let host = (url.host ?? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))).lowercased()
         let tokens = SecurityScopedAccess.captureTokens(for: files)
+        let isCreate: Bool
         if host.hasPrefix("extract") {
-            dispatch(urls: files, tokens: tokens, create: false)
+            isCreate = false
+        } else if host.hasPrefix("create") {
+            isCreate = true
+        } else {
+            Self.log("unknown host/path \(host)")
+            return false
+        }
+        let key = "\(isCreate ? "c" : "e")|" + files.map(\.path).sorted().joined(separator: "|")
+        if lastActionKey == key, let last = lastActionAt, Date().timeIntervalSince(last) < 2 {
+            Self.log("dedup \(key)")
             return true
         }
-        if host.hasPrefix("create") {
-            dispatch(urls: files, tokens: tokens, create: true)
-            return true
-        }
-        Self.log("unknown host/path \(host)")
-        return false
+        lastActionKey = key
+        lastActionAt = Date()
+        dispatch(urls: files, tokens: tokens, create: isCreate)
+        return true
     }
 
     static func log(_ message: String) {
@@ -100,8 +111,15 @@ final class FinderServices: NSObject {
         tokens: [SecurityScopedAccess.Token],
         create: Bool
     ) {
+        if create {
+            pendingCreate = (urls, tokens)
+        } else {
+            pendingExtract = (urls, tokens)
+        }
+        deliverGeneration += 1
+        let generation = deliverGeneration
         let run = { [weak self] in
-            self?.deliver(urls: urls, tokens: tokens, create: create, attempt: 0)
+            self?.deliver(generation: generation, attempt: 0)
         }
         if Thread.isMainThread {
             run()
@@ -110,35 +128,27 @@ final class FinderServices: NSObject {
         }
     }
 
-    private func deliver(
-        urls: [URL],
-        tokens: [SecurityScopedAccess.Token],
-        create: Bool,
-        attempt: Int
-    ) {
+    private func deliver(generation: Int, attempt: Int) {
+        guard generation == deliverGeneration else { return }
         NSApp.activate(ignoringOtherApps: true)
-        if create {
-            if let handler = onCreate {
-                Self.log("dispatch create → handler (\(urls.count) urls)")
-                handler(urls, tokens)
-                return
-            }
-        } else if let handler = onExtract {
-            Self.log("dispatch extract → handler (\(urls.count) urls)")
-            handler(urls, tokens)
-            return
+        if let handler = onExtract, let pending = pendingExtract {
+            pendingExtract = nil
+            Self.log("dispatch extract → handler (\(pending.urls.count) urls)")
+            handler(pending.urls, pending.tokens)
         }
+        if let handler = onCreate, let pending = pendingCreate {
+            pendingCreate = nil
+            Self.log("dispatch create → handler (\(pending.urls.count) urls)")
+            handler(pending.urls, pending.tokens)
+        }
+        if pendingExtract == nil, pendingCreate == nil { return }
         if attempt < 50 {
             Self.log("browser not ready, retry \(attempt + 1)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.deliver(urls: urls, tokens: tokens, create: create, attempt: attempt + 1)
+                self?.deliver(generation: generation, attempt: attempt + 1)
             }
-        } else if create {
-            Self.log("dispatch create → pending after retries")
-            pendingCreate = (urls, tokens)
         } else {
-            Self.log("dispatch extract → pending after retries")
-            pendingExtract = (urls, tokens)
+            Self.log("browser still not ready after retries")
         }
     }
 
@@ -254,18 +264,23 @@ final class FinderServices: NSObject {
     private static let extractWorkflowName = "ArchivePeek Extract Here.workflow"
     private static let createWorkflowName = "ArchivePeek Create Archive.workflow"
 
+    private static let extractWorkflowUUID = "C8E1A0B2-4D5F-4A71-9C3E-A1C4E5E01E01"
+    private static let createWorkflowUUID = "C8E1A0B2-4D5F-4A71-9C3E-A1C4E5E01C01"
+
     private static func installQuickActions() {
         let fileManager = FileManager.default
         try? fileManager.createDirectory(at: servicesDirectory, withIntermediateDirectories: true)
         installWorkflow(
             named: extractWorkflowName,
             menuTitle: "Extract Here",
-            host: "extract"
+            host: "extract",
+            stableUUID: extractWorkflowUUID
         )
         installWorkflow(
             named: createWorkflowName,
             menuTitle: "Create Archive",
-            host: "create"
+            host: "create",
+            stableUUID: createWorkflowUUID
         )
         NSUpdateDynamicServices()
         flushPasteboardServer()
@@ -281,9 +296,15 @@ final class FinderServices: NSObject {
         flushPasteboardServer()
     }
 
-    private static func installWorkflow(named name: String, menuTitle: String, host: String) {
+    private static func installWorkflow(named name: String, menuTitle: String, host: String, stableUUID: String) {
         let root = servicesDirectory.appendingPathComponent(name, isDirectory: true)
         let contents = root.appendingPathComponent("Contents", isDirectory: true)
+        let wflowURL = contents.appendingPathComponent("document.wflow")
+        if let existing = try? String(contentsOf: wflowURL, encoding: .utf8),
+           existing.contains("archivepeek://\(host)"),
+           existing.contains(stableUUID) {
+            return
+        }
         try? FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
         let info = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -314,17 +335,17 @@ final class FinderServices: NSObject {
         </plist>
         """
         try? info.write(to: contents.appendingPathComponent("Info.plist"), atomically: true, encoding: .utf8)
-        try? completeWorkflowDocument(host: host).write(
-            to: contents.appendingPathComponent("document.wflow"),
+        try? completeWorkflowDocument(host: host, actionUUID: stableUUID).write(
+            to: wflowURL,
             atomically: true,
             encoding: .utf8
         )
     }
 
-    private static func completeWorkflowDocument(host: String) -> String {
-        let uuid1 = UUID().uuidString
-        let uuid2 = UUID().uuidString
-        let uuid3 = UUID().uuidString
+    private static func completeWorkflowDocument(host: String, actionUUID: String) -> String {
+        let uuid1 = actionUUID
+        let uuid2 = "B" + String(actionUUID.dropFirst())
+        let uuid3 = "C" + String(actionUUID.dropFirst())
         // Encode paths with JXA (same approach as working Finder services), then open our URL scheme.
         let script = """
         q=""

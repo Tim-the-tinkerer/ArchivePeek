@@ -15,8 +15,23 @@ enum DefaultAppRegistration {
         UTType(archiveTypeIdentifier)
     }
 
+    static func claimedDefaultTypeIdentifiers() -> [String] {
+        var identifiers: Set<String> = [
+            archiveTypeIdentifier,
+            "com.archivepeek.cbz",
+            "public.zip-archive",
+            "public.tar-archive",
+        ]
+        for ext in ArchiveFormatCatalog.allExtensions where !excludedDefaultExtensions.contains(ext) {
+            if let type = UTType(filenameExtension: ext) {
+                identifiers.insert(type.identifier)
+            }
+        }
+        return Array(identifiers)
+    }
+
     static func isDefaultForArchives() -> Bool {
-        isDefaultApplication(for: exportedArchiveType)
+        isDefaultApplication(for: .zip) || isDefaultApplication(for: exportedArchiveType)
     }
 
     static func defaultApplicationSummary() -> String {
@@ -41,13 +56,19 @@ enum DefaultAppRegistration {
 
         registerBundleWithLaunchServices()
 
-        let status = LSSetDefaultRoleHandlerForContentType(
-            archiveTypeIdentifier as CFString,
-            LSRolesMask.all,
-            bundleID as CFString
-        )
+        var anySucceeded = false
+        for identifier in claimedDefaultTypeIdentifiers() {
+            let status = LSSetDefaultRoleHandlerForContentType(
+                identifier as CFString,
+                LSRolesMask.all,
+                bundleID as CFString
+            )
+            if status == noErr {
+                anySucceeded = true
+            }
+        }
 
-        return RegistrationResult(succeeded: status == noErr)
+        return RegistrationResult(succeeded: anySucceeded)
     }
 
     private static func isDefaultApplication(for type: UTType?) -> Bool {

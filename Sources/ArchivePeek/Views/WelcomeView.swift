@@ -28,6 +28,7 @@ struct WelcomeView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .disabled(browser.isCompressing || browser.isLoading)
 
             Text("Drag archives here to open them, or drag files and folders to compress.")
                 .font(.callout)

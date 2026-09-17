@@ -40,7 +40,7 @@ struct HelpView: View {
 
                     helpSection("Extracting", icon: "square.and.arrow.down") {
                         helpBullet("Use the **Extract** menu for Extract Selected, Extract All, or Extract All to Folder.")
-                        helpBullet("**Extract Selected** saves chosen files to a folder you pick.")
+                        helpBullet("**Extract Selected** saves chosen files and folders to a location you pick. Folders keep their contents and structure.")
                         helpBullet("**Extract All** unpacks everything into the folder you choose.")
                         helpBullet("**Extract All to Folder** creates a folder named after the archive inside the location you choose, then unpacks into that folder.")
                         helpBullet("Individual file extraction is flat (no folder structure recreated).")

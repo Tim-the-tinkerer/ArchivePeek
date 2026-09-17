@@ -385,14 +385,24 @@ enum CompressionSupport {
     static func uniqueArchiveURL(
         proposedName: String,
         in directory: URL,
+        format: CompressFormat? = nil,
+        comicBookZip: Bool = false,
         fileManager: FileManager = .default
     ) -> URL {
         let initial = directory.appendingPathComponent(proposedName)
         guard fileManager.fileExists(atPath: initial.path) else { return initial }
 
-        let base = (proposedName as NSString).deletingPathExtension
-        let ext = (proposedName as NSString).pathExtension
-        let suffix = ext.isEmpty ? "" : ".\(ext)"
+        let fullExt = format?.outputExtension(comicBookZip: comicBookZip) ?? ""
+        let base: String
+        let suffix: String
+        if !fullExt.isEmpty, proposedName.lowercased().hasSuffix("." + fullExt) {
+            base = String(proposedName.dropLast(fullExt.count + 1))
+            suffix = "." + fullExt
+        } else {
+            base = (proposedName as NSString).deletingPathExtension
+            let ext = (proposedName as NSString).pathExtension
+            suffix = ext.isEmpty ? "" : ".\(ext)"
+        }
 
         for index in 2...999 {
             let candidate = directory.appendingPathComponent("\(base) \(index)\(suffix)")

@@ -642,6 +642,7 @@ enum ArchiveEngine {
                 handle: handle
             )
         }
+        try PathSafety.enforceExtractContainment(in: destination)
     }
 
     private static func extractAllSynchronously(
@@ -696,6 +697,7 @@ enum ArchiveEngine {
                 )
             }
         }
+        try PathSafety.enforceExtractContainment(in: destination)
     }
 
     /// Fallback Extract All for ZIP when 7-Zip is unavailable (paths already validated).

@@ -8,6 +8,13 @@ All notable changes to ArchivePeek are documented in this file.
 - **Finder Extract Here / Create Archive from a cold start** — choosing the command when ArchivePeek was not already open launched the app but dropped the files. The action now waits until the window is ready, then extracts or compresses.
 - **Finder Services registration** — empty `NSRequiredContext` and `NSSendTypes` so items appear for real Finder files (not only selected path text). File lists are read from the pasteboard before the grant expires.
 - **Finder Quick Actions** — enabling the setting installs working Automator workflows (`Extract Here` / `Create Archive`) that call ArchivePeek via the `archivepeek://` URL scheme.
+- **Double-click archive opened blank windows** — Finder file opens were swallowed by the `archivepeek://` handler and extra WindowGroup scenes were left empty. Double-click now opens the archive in the main window.
+- **Finder actions could run twice** — the same `archivepeek://` click is handled once.
+- **Red close during a job** — closing the window cancels in-flight work and quits (no windowless Dock process).
+- **Extract Selected on folders** — folders in the selection extract with their contents.
+- **Symlink zip-slip** — after extract, links that resolve outside the destination are removed and the operation fails.
+- **Set as default app** — also registers ZIP/TAR and other system types, not only the private ArchivePeek UTI.
+- **Overlapping Create Archive** — a new compress/add/remove cancels the previous job; the progress overlay blocks the window.
 
 ## [1.0.32] — 2026-09-14
 
