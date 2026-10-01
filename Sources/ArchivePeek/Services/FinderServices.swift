@@ -1,17 +1,17 @@
 import AppKit
 
 /// Finder Services and Quick Actions for one-click extract and create.
-final class FinderServices: NSObject {
-    static let shared = FinderServices()
+package final class FinderServices: NSObject {
+    package static let shared = FinderServices()
 
     static let extractMenuTitle = "ArchivePeek: Extract Here"
     static let createMenuTitle = "ArchivePeek: Create Archive"
     static let extractMessage = "extractHere"
     static let createMessage = "createArchive"
-    static let urlScheme = "archivepeek"
+    package static let urlScheme = "archivepeek"
 
-    var onExtract: (([URL], [SecurityScopedAccess.Token]) -> Void)?
-    var onCreate: (([URL], [SecurityScopedAccess.Token]) -> Void)?
+    package var onExtract: (([URL], [SecurityScopedAccess.Token]) -> Void)?
+    package var onCreate: (([URL], [SecurityScopedAccess.Token]) -> Void)?
 
     private var pendingExtract: (urls: [URL], tokens: [SecurityScopedAccess.Token])?
     private var pendingCreate: (urls: [URL], tokens: [SecurityScopedAccess.Token])?
@@ -25,20 +25,20 @@ final class FinderServices: NSObject {
         pendingExtract != nil || pendingCreate != nil
     }
 
-    func takePendingExtract() -> (urls: [URL], tokens: [SecurityScopedAccess.Token])? {
+    package func takePendingExtract() -> (urls: [URL], tokens: [SecurityScopedAccess.Token])? {
         let value = pendingExtract
         pendingExtract = nil
         return value
     }
 
-    func takePendingCreate() -> (urls: [URL], tokens: [SecurityScopedAccess.Token])? {
+    package func takePendingCreate() -> (urls: [URL], tokens: [SecurityScopedAccess.Token])? {
         let value = pendingCreate
         pendingCreate = nil
         return value
     }
 
     @objc(extractHere:userData:error:)
-    func extractHere(
+    package func extractHere(
         _ pboard: NSPasteboard,
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString?>?
@@ -50,7 +50,7 @@ final class FinderServices: NSObject {
     }
 
     @objc(createArchive:userData:error:)
-    func createArchive(
+    package func createArchive(
         _ pboard: NSPasteboard,
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString?>?
@@ -61,7 +61,7 @@ final class FinderServices: NSObject {
         dispatch(urls: urls, tokens: tokens, create: true)
     }
 
-    func handleActionURL(_ url: URL) -> Bool {
+    package func handleActionURL(_ url: URL) -> Bool {
         Self.log("handleActionURL \(url.absoluteString)")
         guard url.scheme?.lowercased() == Self.urlScheme else { return false }
         let files = Self.paths(fromActionURL: url)
@@ -91,7 +91,7 @@ final class FinderServices: NSObject {
         return true
     }
 
-    static func log(_ message: String) {
+    package static func log(_ message: String) {
         let line = "\(Date()) \(message)\n"
         NSLog("ArchivePeek Finder: %@", message)
         let dir = FileManager.default.homeDirectoryForCurrentUser
@@ -196,7 +196,7 @@ final class FinderServices: NSObject {
         }
     }
 
-    static func applyPreference() {
+    package static func applyPreference() {
         setContextMenuEnabled(AppSettings.finderContextMenuEnabled)
     }
 

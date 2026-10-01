@@ -2,15 +2,17 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct ContentView: View {
+package struct ContentView: View {
     @EnvironmentObject private var browser: ArchiveBrowserModel
+
+    package init() {}
 
     private var isBusy: Bool {
         browser.isLoading || browser.isCompressing || browser.isPreviewing
             || browser.showRemoveConfirmation || browser.showAddReplaceConfirmation
     }
 
-    var body: some View {
+    package var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()

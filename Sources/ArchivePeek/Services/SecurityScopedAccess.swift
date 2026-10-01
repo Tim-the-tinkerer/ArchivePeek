@@ -1,7 +1,7 @@
 import Foundation
 
-enum SecurityScopedAccess {
-    final class Token: @unchecked Sendable {
+package enum SecurityScopedAccess {
+    package final class Token: @unchecked Sendable {
         let url: URL
         private let bookmark: Data?
         private let lock = NSLock()
@@ -97,7 +97,7 @@ enum SecurityScopedAccess {
     }
 
     /// Capture bookmarks synchronously in an open/save panel or drop callback, before any async hop.
-    static func captureTokens(for urls: [URL]) -> [Token] {
+    package static func captureTokens(for urls: [URL]) -> [Token] {
         urls.map { url in
             let standardized = url.standardizedFileURL
             return Token(url: standardized, bookmark: createBookmarkWhileAccessible(for: standardized))

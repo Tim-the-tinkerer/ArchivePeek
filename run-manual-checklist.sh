@@ -39,7 +39,7 @@ if [[ -x "$APP" ]]; then pass "ArchivePeek binary exists"; else fail "ArchivePee
 if [[ -x "$BUNDLED_7ZZ" ]]; then pass "Bundled 7zz exists"; else fail "Bundled 7zz missing"; fi
 if "$TOOLS" >/dev/null 2>&1; then pass "Materialized 7zz runs"; else fail "Materialized 7zz smoke test"; fi
 VER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ArchivePeek.app/Contents/Info.plist)
-[[ "$VER" == "1.0.38" ]] && pass "Version is 1.0.38" || fail "Version expected 1.0.38, got $VER"
+[[ "$VER" == "1.0.39" ]] && pass "Version is 1.0.39" || fail "Version expected 1.0.39, got $VER"
 
 echo
 echo "2. Browse / list archives"
@@ -576,6 +576,17 @@ if echo "$NOPASS_STDIN" | grep -Eiq "password|encrypted"; then
   pass "7zz returns immediately without hanging on encrypted archive"
 else
   fail "7zz non-interactive password behavior"
+fi
+
+echo
+echo "8. Swift package tests"
+# shellcheck source=select-xcode-toolchain.sh
+source "./select-xcode-toolchain.sh"
+if swift test --filter ArchivePeekTests >"$TMP/swift-test.log" 2>&1; then
+  pass "Swift package tests"
+else
+  tail -50 "$TMP/swift-test.log"
+  fail "Swift package tests"
 fi
 
 echo

@@ -2,11 +2,11 @@ import AppKit
 import SwiftUI
 
 @MainActor
-enum WindowDropInstaller {
+package enum WindowDropInstaller {
     private static var dropHandler: (([URL]) -> Void)?
     private static var targetingHandler: ((Bool) -> Void)?
 
-    static func configure(
+    package static func configure(
         onDrop: @escaping ([URL]) -> Void,
         onTargetingChanged: @escaping (Bool) -> Void
     ) {
@@ -14,7 +14,7 @@ enum WindowDropInstaller {
         targetingHandler = onTargetingChanged
     }
 
-    static func install(on window: NSWindow) {
+    package static func install(on window: NSWindow) {
         guard !(window.contentView is WindowDropContainerView) else { return }
         guard let existingContent = window.contentView else { return }
 

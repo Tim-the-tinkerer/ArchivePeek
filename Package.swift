@@ -8,13 +8,27 @@ let package = Package(
         .executable(name: "ArchivePeek", targets: ["ArchivePeek"]),
     ],
     targets: [
-        .executableTarget(
-            name: "ArchivePeek",
+        .target(
+            name: "ArchivePeekCore",
             path: "Sources/ArchivePeek",
             linkerSettings: [
                 .linkedFramework("QuickLook"),
                 .linkedFramework("QuickLookUI"),
             ]
+        ),
+        .executableTarget(
+            name: "ArchivePeek",
+            dependencies: ["ArchivePeekCore"],
+            path: "Sources/ArchivePeekMain",
+            linkerSettings: [
+                .linkedFramework("QuickLook"),
+                .linkedFramework("QuickLookUI"),
+            ]
+        ),
+        .testTarget(
+            name: "ArchivePeekTests",
+            dependencies: ["ArchivePeekCore"],
+            path: "Tests/ArchivePeekTests"
         ),
     ]
 )

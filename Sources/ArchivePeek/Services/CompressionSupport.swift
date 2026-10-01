@@ -594,6 +594,11 @@ enum CompressionSupport {
             try? fileManager.removeItem(at: partialURL)
             // If work was already moved into partial, nothing left at workURL.
             try? fileManager.removeItem(at: workURL)
+            // Verify runs inside this do. Cancel during "Verifying integrity…" must stay
+            // a cancellation. The staged sibling is already removed; the previous archive is untouched.
+            if let archiveError = error as? ArchiveError, case .cancelled = archiveError {
+                throw ArchiveError.cancelled
+            }
             throw ArchiveError.commandFailed(
                 "Could not save the archive to \(finalURL.path): \(error.localizedDescription)"
             )

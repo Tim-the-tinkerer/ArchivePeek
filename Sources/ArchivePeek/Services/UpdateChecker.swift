@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-enum UpdateChecker {
+package enum UpdateChecker {
     enum Outcome: Sendable {
         case upToDate(current: String)
         case updateAvailable(current: String, latest: String, releaseURL: URL)
@@ -107,7 +107,7 @@ enum UpdateChecker {
     }
 
     @MainActor
-    static func checkAndPresent() {
+    package static func checkAndPresent() {
         Task {
             let outcome = await checkForUpdates()
             presentCheckResult(outcome)

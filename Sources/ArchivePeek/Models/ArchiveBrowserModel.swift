@@ -3,20 +3,20 @@ import Foundation
 import QuickLookUI
 import UniformTypeIdentifiers
 @MainActor
-final class ArchiveBrowserModel: ObservableObject {
+package final class ArchiveBrowserModel: ObservableObject {
     @Published var archiveURL: URL?
     @Published var listing: ArchiveListing?
     @Published var currentPath: String = ""
     @Published var selection: Set<String> = []
     @Published private(set) var visibleEntries: [ArchiveEntry] = []
-    @Published var isLoading = false
+    @Published package var isLoading = false
     @Published var statusMessage = "Open an archive to browse its contents."
     @Published var errorMessage: String?
     @Published var password: String = ""
     @Published var passwordErrorMessage: String?
     @Published var needsPassword = false
     @Published var showCompressSheet = false
-    @Published var showHelpSheet = false
+    @Published package var showHelpSheet = false
     @Published var compressSources: [URL] = []
     @Published var compressFormat: CompressFormat = .defaultFormat
     @Published var compressionLevel = 5
@@ -27,11 +27,11 @@ final class ArchiveBrowserModel: ObservableObject {
     @Published var compressSaveAsComicBookZip = false
     @Published var compressSplitVolume: SplitVolumePreset = .off
     @Published var verifyAfterCompress = true
-    @Published var isCompressing = false
+    @Published package var isCompressing = false
     @Published var compressProgress: Double = 0
     @Published var compressProgressMessage = "Preparing…"
     @Published var compressProgressIndeterminate = false
-    @Published var isDropTargeted = false
+    @Published package var isDropTargeted = false
     @Published private(set) var isPreviewing = false
     @Published var progressOperationTitle = "Creating Archive"
     @Published var showRemoveConfirmation = false
@@ -67,7 +67,7 @@ final class ArchiveBrowserModel: ObservableObject {
     private var pendingRemoveEntries: [ArchiveEntry] = []
     private var pendingMultiOpenNote: String?
 
-    init() {
+    package init() {
         AppSettings.applyCompressionDefaults(to: self)
     }
 
@@ -87,7 +87,7 @@ final class ArchiveBrowserModel: ObservableObject {
         listing != nil
     }
 
-    var hasOpenArchive: Bool {
+    package var hasOpenArchive: Bool {
         archiveURL != nil
     }
 
@@ -117,7 +117,7 @@ final class ArchiveBrowserModel: ObservableObject {
             || showRemoveConfirmation || showAddReplaceConfirmation
     }
 
-    func closeArchive() {
+    package func closeArchive() {
         loadTask?.cancel()
         loadHandle?.cancel()
         compressionHandle?.cancel()
@@ -155,7 +155,7 @@ final class ArchiveBrowserModel: ObservableObject {
         statusMessage = "Open an archive to browse its contents."
     }
 
-    func openArchive(_ url: URL, accessTokens: [SecurityScopedAccess.Token] = []) {
+    package func openArchive(_ url: URL, accessTokens: [SecurityScopedAccess.Token] = []) {
         loadTask?.cancel()
         loadHandle?.cancel()
         // Cancel extract/open/verify against the previous archive; loadArchive bumps loadGeneration.
@@ -403,7 +403,7 @@ final class ArchiveBrowserModel: ObservableObject {
         }
     }
 
-    func handleFinderExtract(_ urls: [URL], tokens: [SecurityScopedAccess.Token] = []) {
+    package func handleFinderExtract(_ urls: [URL], tokens: [SecurityScopedAccess.Token] = []) {
         FinderServices.log("handleFinderExtract \(urls.map(\.path).joined(separator: ", "))")
         let archives = SplitArchive.uniqueCanonicalArchives(
             from: urls.map(\.standardizedFileURL).filter { ArchiveFormatCatalog.isArchive($0) }
@@ -418,7 +418,7 @@ final class ArchiveBrowserModel: ObservableObject {
         Task { await extractFinderArchives(archives, extraTokens: tokens) }
     }
 
-    func handleFinderCreate(_ urls: [URL], tokens: [SecurityScopedAccess.Token] = []) {
+    package func handleFinderCreate(_ urls: [URL], tokens: [SecurityScopedAccess.Token] = []) {
         FinderServices.log("handleFinderCreate \(urls.map(\.path).joined(separator: ", "))")
         let items = urls.map(\.standardizedFileURL).filter { url in
             if FileManager.default.fileExists(atPath: url.path) { return true }
@@ -540,7 +540,7 @@ final class ArchiveBrowserModel: ObservableObject {
         }
     }
 
-    func handleDroppedURLs(_ urls: [URL]) {
+    package func handleDroppedURLs(_ urls: [URL]) {
         let standardized = urls.map { $0.standardizedFileURL }
         let tokens = SecurityScopedAccess.captureTokens(for: standardized)
         let archives = SplitArchive.uniqueCanonicalArchives(
@@ -701,7 +701,7 @@ final class ArchiveBrowserModel: ObservableObject {
         }
     }
 
-    func presentCompressSheet(with sources: [URL] = []) {
+    package func presentCompressSheet(with sources: [URL] = []) {
         AppSettings.applyCompressionDefaults(to: self)
         if !sources.isEmpty {
             mergeCompressSources(sources)
@@ -1519,7 +1519,7 @@ final class ArchiveBrowserModel: ObservableObject {
         compressProgressIndeterminate = update.indeterminate
     }
 
-    func noteAdditionalArchivesNotOpened(_ note: String) {
+    package func noteAdditionalArchivesNotOpened(_ note: String) {
         if listing != nil, !isLoading {
             let name = archiveURL?.lastPathComponent ?? "archive"
             statusMessage = "Opened \(name). \(note)"
@@ -1541,7 +1541,7 @@ final class ArchiveBrowserModel: ObservableObject {
         dragOutPrepared.removeAll()
     }
 
-    func cleanupOnTermination() {
+    package func cleanupOnTermination() {
         loadTask?.cancel()
         loadHandle?.cancel()
         compressionHandle?.cancel()
@@ -1772,19 +1772,19 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 }
 
-final class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
-    static let shared = QuickLookCoordinator()
+package final class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+    package static let shared = QuickLookCoordinator()
     var previewURL: URL?
 
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+    package func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
         previewURL == nil ? 0 : 1
     }
 
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+    package func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
         previewURL as QLPreviewItem?
     }
 
-    func previewPanelWillClose(_ panel: QLPreviewPanel!) {
+    package func previewPanelWillClose(_ panel: QLPreviewPanel!) {
         previewURL = nil
     }
 }

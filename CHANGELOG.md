@@ -2,6 +2,14 @@
 
 All notable changes to ArchivePeek are documented in this file.
 
+## [1.0.39] — 2026-10-01
+
+### Fixed
+- **Cancel during verify** — cancelling while the new archive is being checked now says compression was cancelled. The previous archive is still left in place.
+
+### Added
+- **Swift tests** — `swift test` checks the save step itself: a successful replace, a failed verify, and a cancelled verify. Path checks, exclusions, versions, progress parsing, and split-volume identity are covered there too.
+
 ## [1.0.38] — 2026-10-01
 
 ### Fixed

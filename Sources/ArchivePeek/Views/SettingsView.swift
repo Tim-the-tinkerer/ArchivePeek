@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-struct SettingsView: View {
+package struct SettingsView: View {
+    package init() {}
     @AppStorage(AppSettings.Keys.compressFormat) private var compressFormatRaw = CompressFormat.defaultFormat.rawValue
     @AppStorage(AppSettings.Keys.compressionLevel) private var compressionLevel = 5
     @AppStorage(AppSettings.Keys.verifyAfterCompress) private var verifyAfterCompress = true
@@ -38,7 +39,7 @@ struct SettingsView: View {
         )
     }
 
-    var body: some View {
+    package var body: some View {
         ScrollView {
         Form {
             Section {

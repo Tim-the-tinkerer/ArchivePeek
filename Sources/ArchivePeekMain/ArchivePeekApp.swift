@@ -1,4 +1,5 @@
 import AppKit
+import ArchivePeekCore
 import Carbon
 import QuickLookUI
 import SwiftUI

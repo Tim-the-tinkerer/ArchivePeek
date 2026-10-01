@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import UniformTypeIdentifiers
 
-enum DefaultAppRegistration {
+package enum DefaultAppRegistration {
     static let archiveTypeIdentifier = "com.archivepeek.archive"
     /// Openable in ArchivePeek but excluded from default-app registration (disk images have their own handlers).
     static let excludedDefaultExtensions: Set<String> = ["dmg", "iso"]
@@ -53,7 +53,7 @@ enum DefaultAppRegistration {
     /// Re-register this app’s Info.plist types with Launch Services (exported UTIs, document roles).
     /// Call on launch so an older `/Applications/ArchivePeek.app` does not keep stale extension maps
     /// (e.g. `.cbz` under the generic archive type, which produced wrong Finder icons).
-    static func registerBundleWithLaunchServices() {
+    package static func registerBundleWithLaunchServices() {
         let appURL = Bundle.main.bundleURL as CFURL
         LSRegisterURL(appURL, true)
     }
