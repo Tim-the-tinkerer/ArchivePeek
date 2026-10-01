@@ -34,6 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var browser: ArchiveBrowserModel?
     private weak var mainWindow: NSWindow?
     private var pendingOpenURL: URL?
+    private var pendingExtraArchiveNote: String?
+    private var finderOpenPrimaryPath: String?
+    private var finderOpenWindowStart: Date?
+    private var finderOpenSeenPaths: Set<String> = []
+    private var extraArchiveCount = 0
     private var mainWindowCloseObserver: NSObjectProtocol?
     private var isReadyToQuitOnWindowClose = false
 
@@ -109,6 +114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let url = pendingOpenURL {
             pendingOpenURL = nil
             openArchive(url, in: browser)
+        }
+        if let note = pendingExtraArchiveNote {
+            pendingExtraArchiveNote = nil
+            browser.noteAdditionalArchivesNotOpened(note)
         }
         drainPendingFinderActions(using: browser)
         DispatchQueue.main.async { [weak self] in
@@ -193,11 +202,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = FinderServices.shared.handleActionURL(url)
             return
         }
-        let fileURL = url.isFileURL ? url : URL(fileURLWithPath: url.path)
+        let fileURL = (url.isFileURL ? url : URL(fileURLWithPath: url.path)).standardizedFileURL
+        let path = fileURL.path
+        let now = Date()
+        if let start = finderOpenWindowStart,
+           now.timeIntervalSince(start) < 2,
+           finderOpenPrimaryPath != nil {
+            if finderOpenSeenPaths.insert(path).inserted {
+                extraArchiveCount += 1
+                let note = "\(extraArchiveCount) additional archive(s) were not opened."
+                pendingExtraArchiveNote = note
+                browser?.noteAdditionalArchivesNotOpened(note)
+            }
+            return
+        }
+        finderOpenPrimaryPath = path
+        finderOpenWindowStart = now
+        finderOpenSeenPaths = [path]
+        extraArchiveCount = 0
+        pendingExtraArchiveNote = nil
         if let browser {
             openArchive(fileURL, in: browser)
         } else {
-            pendingOpenURL = fileURL.standardizedFileURL
+            pendingOpenURL = fileURL
         }
     }
 
@@ -221,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             archives.append(url)
         }
-        if let url = archives.first {
+        for url in archives {
             openFileFromFinder(url)
         }
     }

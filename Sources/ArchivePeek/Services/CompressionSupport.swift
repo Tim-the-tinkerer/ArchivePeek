@@ -82,8 +82,9 @@ enum CompressionSupport {
     }
 
     /// Copy sources into temp before compression. Keeps project trees complete (`.git`,
-    /// `.gitignore`, `.build`, `node_modules`, hidden config, symlinks, packages). Only strips
-    /// macOS junk (`.DS_Store`, AppleDouble `._*`, `__MACOSX`). Runs in-process with security scope.
+    /// `.gitignore`, `.build`, `node_modules`, hidden config, symlinks, packages) unless a
+    /// pattern in Settings → Exclusions says otherwise. Always strips macOS junk
+    /// (`.DS_Store`, AppleDouble `._*`, `__MACOSX`). Runs in-process with security scope.
     ///
     /// Uses whole-tree `copyItem` (not file-by-file walk) so large SwiftPM `.build` trees,
     /// `.app` bundles, and framework layouts stay intact and prepare does not hang on symlink
@@ -104,7 +105,8 @@ enum CompressionSupport {
             throw ArchiveError.invalidSelection
         }
 
-        try validateUniqueStagingBasenames(standardized)
+        let exclusions = ArchiveExclusions.Matcher(patterns: AppSettings.customExclusionPatterns)
+        try validateUniqueStagingBasenames(standardized, exclusions: exclusions)
 
         if isCancelled?() == true { throw ArchiveError.cancelled }
 
@@ -127,7 +129,7 @@ enum CompressionSupport {
                 throw ArchiveError.entryNotFound(source.lastPathComponent)
             }
 
-            if shouldSkipStagingFileName(source.lastPathComponent) { continue }
+            if shouldOmitFromArchive(source.lastPathComponent, exclusions: exclusions) { continue }
 
             let destination = stagingRoot.appendingPathComponent(source.lastPathComponent)
             let isSymlink = (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
@@ -147,7 +149,7 @@ enum CompressionSupport {
                 // Whole-tree copy preserves packages, symlinks, empty dirs, and hidden project files.
                 try copyCompressItem(from: source, to: destination, fileManager: fileManager)
                 if isDirectory.boolValue {
-                    try pruneMacJunk(from: destination, fileManager: fileManager)
+                    try pruneStagedTree(destination, exclusions: exclusions, fileManager: fileManager)
                 }
             }
             stagedItems += 1
@@ -185,12 +187,16 @@ enum CompressionSupport {
     /// Staging uses `lastPathComponent` only; two sources with the same basename would overwrite.
     /// Comparison is case-insensitive: the default APFS/HFS+ volume (and temp dir) is usually
     /// case-insensitive, so `Foo` and `foo` collide even though Swift String equality does not.
-    static func validateUniqueStagingBasenames(_ sources: [URL]) throws {
+    static func validateUniqueStagingBasenames(
+        _ sources: [URL],
+        exclusions: ArchiveExclusions.Matcher? = nil
+    ) throws {
+        let matcher = exclusions ?? ArchiveExclusions.Matcher(patterns: AppSettings.customExclusionPatterns)
         var seen: [String: String] = [:] // lowercased key → display name
         var duplicates = Set<String>()
         for source in sources {
             let name = source.lastPathComponent
-            if shouldSkipStagingFileName(name) { continue }
+            if shouldOmitFromArchive(name, exclusions: matcher) { continue }
             let key = name.lowercased(with: Locale(identifier: "en_US_POSIX"))
             if let existing = seen[key] {
                 duplicates.insert(existing)
@@ -206,21 +212,32 @@ enum CompressionSupport {
         }
     }
 
-    /// Remove only macOS junk from an already-copied tree.
+    /// Remove macOS junk and Settings exclusions from an already-copied tree.
     /// Uses `subpathsOfDirectory` rather than `enumerator`: NSDirectoryEnumerator often omits
     /// AppleDouble `._*` files even when they exist as real names on disk.
-    private static func pruneMacJunk(from root: URL, fileManager: FileManager) throws {
+    static func pruneStagedTree(
+        _ root: URL,
+        exclusions: ArchiveExclusions.Matcher? = nil,
+        fileManager: FileManager = .default
+    ) throws {
         guard let subpaths = try? fileManager.subpathsOfDirectory(atPath: root.path) else { return }
+        let matcher = exclusions ?? ArchiveExclusions.Matcher(patterns: AppSettings.customExclusionPatterns)
 
-        var toDelete: [URL] = []
+        var relativeDeletes: [String] = []
+        // Subpaths are relative to the copied folder. The archive member path includes that folder's name,
+        // so `src/*.swift` must also be tested as `src/` + the subpath when the copied folder is `src`.
+        let rootName = root.lastPathComponent
         for sub in subpaths {
             let name = (sub as NSString).lastPathComponent
-            guard shouldSkipStagingFileName(name) else { continue }
-            toDelete.append(root.appendingPathComponent(sub))
+            let excluded = matcher.excludes(sub) || matcher.excludes(rootName + "/" + sub)
+            guard isMacJunkFileName(name) || excluded else { continue }
+            if relativeDeletes.contains(where: { sub.hasPrefix($0 + "/") }) { continue }
+            relativeDeletes.removeAll { $0.hasPrefix(sub + "/") }
+            relativeDeletes.append(sub)
         }
-        // Deepest paths first so directory removes succeed after children are gone.
-        for url in toDelete.sorted(by: { $0.path.count > $1.path.count }) {
-            try? fileManager.removeItem(at: url)
+        // Deepest paths first so a nested match is removed before its parent.
+        for relative in relativeDeletes.sorted(by: { $0.count > $1.count }) {
+            try? fileManager.removeItem(at: root.appendingPathComponent(relative))
         }
     }
 
@@ -238,8 +255,18 @@ enum CompressionSupport {
         try fileManager.createSymbolicLink(atPath: destination.path, withDestinationPath: linkText)
     }
 
+    /// macOS junk, or a name selected by Settings → Exclusions.
+    static func shouldOmitFromArchive(
+        _ name: String,
+        exclusions: ArchiveExclusions.Matcher? = nil
+    ) -> Bool {
+        if isMacJunkFileName(name) { return true }
+        let matcher = exclusions ?? ArchiveExclusions.Matcher(patterns: AppSettings.customExclusionPatterns)
+        return matcher.excludes(name)
+    }
+
     /// Only true macOS archive noise — never project source such as `.gitignore` or `.git`.
-    private static func shouldSkipStagingFileName(_ name: String) -> Bool {
+    private static func isMacJunkFileName(_ name: String) -> Bool {
         if name == ".DS_Store" || name == "__MACOSX" { return true }
         if name.hasPrefix("._") { return true }
         return false
@@ -252,7 +279,7 @@ enum CompressionSupport {
         }
 
         for source in standardized {
-            guard fileManager.fileExists(atPath: source.path) else {
+            guard sourceExists(source, fileManager: fileManager) else {
                 throw ArchiveError.entryNotFound(source.lastPathComponent)
             }
         }
@@ -263,6 +290,13 @@ enum CompressionSupport {
         return Context(workingDirectory: commonDirectory, itemNames: itemNames)
     }
 
+    /// `fileExists` follows links and returns false for a dangling symlink.
+    /// Staging still copies that link text, so compress must accept it.
+    private static func sourceExists(_ url: URL, fileManager: FileManager) -> Bool {
+        if fileManager.fileExists(atPath: url.path) { return true }
+        return (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+    }
+
     /// Relative item names with cwd at the nearest common parent — how macOS zip expects paths.
     static func zipContext(for sources: [URL], fileManager: FileManager = .default) throws -> Context {
         let standardized = sources.map { $0.standardizedFileURL }
@@ -271,7 +305,7 @@ enum CompressionSupport {
         }
 
         for source in standardized {
-            guard fileManager.fileExists(atPath: source.path) else {
+            guard sourceExists(source, fileManager: fileManager) else {
                 throw ArchiveError.entryNotFound(source.lastPathComponent)
             }
         }
@@ -553,6 +587,9 @@ enum CompressionSupport {
             } else {
                 try fileManager.moveItem(at: partialURL, to: finalURL)
             }
+            // The new single file replaces an older split set of the same name.
+            // Leaving `Name.7z.001` or `Name.z01` would make the next open read the old volumes.
+            removeSupersededSplitVolumes(beside: finalURL, fileManager: fileManager)
         } catch {
             try? fileManager.removeItem(at: partialURL)
             // If work was already moved into partial, nothing left at workURL.
@@ -817,7 +854,6 @@ enum CompressionSupport {
     static let macMetadataZipDeletionPatterns: [String] = [
         ".DS_Store",
         "*/.DS_Store",
-        "*.DS_Store",
         "*/._*",
         "__MACOSX/*",
         "*/__MACOSX/*",
@@ -825,6 +861,7 @@ enum CompressionSupport {
 
     static func stripMacJunkFromZip(
         at archive: URL,
+        removeCustomExclusions: Bool = true,
         fileManager: FileManager = .default
     ) throws {
         guard let zip = ToolLocator.zipPath,
@@ -837,9 +874,11 @@ enum CompressionSupport {
             )
         }
 
+        let patterns = removeCustomExclusions ? AppSettings.customExclusionPatterns : []
+        let exclusions = ArchiveExclusions.Matcher(patterns: patterns)
         // Ditto and some zip runs store folder-level metadata with a literal path prefix.
         if let entries = try? ZipArchiveLister.entries(at: archive, maxEntries: 10_000) {
-            for entry in entries where shouldStripFromZip(entry.path) {
+            for entry in entries where shouldStripFromZip(entry.path, exclusions: exclusions) {
                 _ = try? ProcessRunner.run(
                     executable: zip,
                     arguments: ["-d", archive.path, entry.path]
@@ -848,11 +887,15 @@ enum CompressionSupport {
         }
     }
 
-    private static func shouldStripFromZip(_ path: String) -> Bool {
+    private static func shouldStripFromZip(
+        _ path: String,
+        exclusions: ArchiveExclusions.Matcher
+    ) -> Bool {
         let name = (path as NSString).lastPathComponent
         if name == ".DS_Store" || name == "__MACOSX" { return true }
         if name.hasPrefix("._") { return true }
-        return path.contains("/__MACOSX/")
+        if path.contains("/__MACOSX/") { return true }
+        return exclusions.excludes(path)
     }
 
     static func zipExclusionPatterns(
@@ -862,6 +905,10 @@ enum CompressionSupport {
         fileManager: FileManager = .default
     ) -> [String] {
         var patterns = macMetadataZipExclusions
+        patterns += ArchiveExclusions.archiveToolPatterns(
+            for: AppSettings.customExclusionPatterns,
+            wildcards: false
+        )
 
         for source in sources {
             var isDirectory: ObjCBool = false
@@ -885,9 +932,32 @@ enum CompressionSupport {
         fileManager: FileManager = .default
     ) -> [String] {
         var patterns = macMetadataSevenZipExclusions
+        // 7-Zip lets `*` cross `/`. Staging already applied the stricter match.
+        patterns += ArchiveExclusions.archiveToolPatterns(
+            for: AppSettings.customExclusionPatterns,
+            wildcards: false
+        )
         patterns += nestedArchivePathsInsideSources(archive: archive, sources: sources, fileManager: fileManager)
             .map(\.path)
         return patterns.map { "-xr!\($0)" }
+    }
+
+    /// macOS junk plus Settings exclusions, as `7zz -xr!` switches.
+    static func sevenZipExcludeSwitches() -> [String] {
+        var patterns = macMetadataSevenZipExclusions
+        patterns += ArchiveExclusions.archiveToolPatterns(
+            for: AppSettings.customExclusionPatterns,
+            wildcards: false
+        )
+        return patterns.map { "-xr!\($0)" }
+    }
+
+    /// macOS junk plus Settings exclusions, for `zip -x` and `bsdtar --exclude`.
+    static func tarAndZipExcludePatterns() -> [String] {
+        macMetadataZipExclusions + ArchiveExclusions.archiveToolPatterns(
+            for: AppSettings.customExclusionPatterns,
+            wildcards: false
+        )
     }
 
     static func archiveIsInsideSourceTree(
@@ -895,19 +965,96 @@ enum CompressionSupport {
         sources: [URL],
         fileManager: FileManager = .default
     ) -> Bool {
-        let archivePath = archive.standardizedFileURL.path
+        // Resolve intermediate symlinks (`/var` vs `/private/var`, or a link used as a parent folder).
+        // A selected symlink stays a link: its target is not the tree being packed.
+        let archivePath = pathPreservingLeafSymlink(archive).path
         for source in sources {
+            if (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+                continue
+            }
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: source.path, isDirectory: &isDirectory),
                   isDirectory.boolValue else { continue }
 
-            let root = source.standardizedFileURL.path
-            let prefix = root.hasSuffix("/") ? root : root + "/"
-            if archivePath.hasPrefix(prefix) {
+            let root = pathPreservingLeafSymlink(source)
+            if path(archivePath, isInsideDirectory: root.path, volumeProbe: root) {
                 return true
             }
         }
         return false
+    }
+
+    /// True when both URLs name the same file. Case-insensitive volumes treat `Notes.7z` and `notes.7z` as one file.
+    static func sameFile(_ lhs: URL, _ rhs: URL) -> Bool {
+        let left = lhs.standardizedFileURL
+        let right = rhs.standardizedFileURL
+        if let leftID = try? left.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier as? NSObject,
+           let rightID = try? right.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier as? NSObject {
+            return leftID.isEqual(rightID)
+        }
+        if volumeIsCaseSensitive(left) {
+            return left.path == right.path
+        }
+        return left.path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            == right.path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+    }
+
+    /// `directory/child` is inside `directory`. On a case-insensitive volume, `Project` and `project` are the same folder.
+    private static func path(_ path: String, isInsideDirectory directoryPath: String, volumeProbe: URL) -> Bool {
+        let prefix = directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/"
+        if volumeIsCaseSensitive(volumeProbe) {
+            return path.hasPrefix(prefix)
+        }
+        return path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            .hasPrefix(prefix.lowercased(with: Locale(identifier: "en_US_POSIX")))
+    }
+
+    private static func volumeIsCaseSensitive(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]).volumeSupportsCaseSensitiveNames) == true
+    }
+
+    /// After a single-file save, drop numbered volumes that belonged to the previous archive of this name.
+    private static func removeSupersededSplitVolumes(beside finalURL: URL, fileManager: FileManager) {
+        let caseSensitive = volumeIsCaseSensitive(finalURL)
+        let keepPath = finalURL.standardizedFileURL.path
+        let keep = caseSensitive ? keepPath : keepPath.lowercased(with: Locale(identifier: "en_US_POSIX"))
+        var doomed: [URL] = []
+
+        let numeric = URL(fileURLWithPath: finalURL.path + ".001")
+        if fileManager.fileExists(atPath: numeric.path),
+           let set = SplitArchive.set(for: numeric, fileManager: fileManager) {
+            doomed.append(contentsOf: set.volumes)
+        }
+
+        let ext = finalURL.pathExtension.lowercased(with: Locale(identifier: "en_US_POSIX"))
+        let stem = finalURL.deletingPathExtension().lastPathComponent
+        let parent = finalURL.deletingLastPathComponent()
+        var companions: [String] = []
+        if ext == "zip" {
+            companions.append("\(stem).z01")
+        } else if ext == "rar" {
+            companions.append(contentsOf: [
+                "\(stem).part1.rar",
+                "\(stem).part01.rar",
+                "\(stem).part001.rar",
+                "\(stem).r00",
+            ])
+        }
+        for name in companions {
+            let url = parent.appendingPathComponent(name)
+            if fileManager.fileExists(atPath: url.path),
+               let set = SplitArchive.set(for: url, fileManager: fileManager) {
+                doomed.append(contentsOf: set.volumes)
+            }
+        }
+
+        var seen = Set<String>()
+        for url in doomed {
+            let path = url.standardizedFileURL.path
+            let key = caseSensitive ? path : path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            guard key != keep, seen.insert(key).inserted else { continue }
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     static func sourcesIncludeDirectory(_ sources: [URL], fileManager: FileManager = .default) -> Bool {
@@ -927,19 +1074,41 @@ enum CompressionSupport {
     ) -> [URL] {
         let archiveName = archive.lastPathComponent
         var matches: [URL] = []
+        var seen = Set<String>()
 
         for source in sources {
+            // A selected symlink is stored as a link. Do not walk its target.
+            if (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+                continue
+            }
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: source.path, isDirectory: &isDirectory),
                   isDirectory.boolValue else { continue }
 
-            let candidate = source.appendingPathComponent(archiveName)
-            if fileManager.fileExists(atPath: candidate.path) {
-                matches.append(candidate.standardizedFileURL)
+            let root = pathPreservingLeafSymlink(source)
+            // subpathsOfDirectory does not follow a directory symlink, and it lists AppleDouble names.
+            guard let subpaths = try? fileManager.subpathsOfDirectory(atPath: root.path) else { continue }
+            let caseSensitive = volumeIsCaseSensitive(root)
+            for sub in subpaths {
+                let name = (sub as NSString).lastPathComponent
+                guard fileNamesMatch(name, archiveName, caseSensitive: caseSensitive) else { continue }
+                let url = root.appendingPathComponent(sub).standardizedFileURL
+                let key = caseSensitive
+                    ? url.path
+                    : url.path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+                if seen.insert(key).inserted {
+                    matches.append(url)
+                }
             }
         }
 
         return matches
+    }
+
+    private static func fileNamesMatch(_ lhs: String, _ rhs: String, caseSensitive: Bool) -> Bool {
+        if caseSensitive { return lhs == rhs }
+        return lhs.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            == rhs.lowercased(with: Locale(identifier: "en_US_POSIX"))
     }
 
     private static func copyCompressItem(
@@ -960,8 +1129,8 @@ enum CompressionSupport {
     }
 
     private static func commonParentDirectory(for urls: [URL]) -> URL? {
-        // Resolve symlink roots first so /var vs /private/var share a true common parent.
-        let resolved = urls.map { $0.resolvingSymlinksInPath().standardizedFileURL }
+        // Resolve /var vs /private/var, but keep a selected symlink as itself.
+        let resolved = urls.map { pathPreservingLeafSymlink($0) }
         guard let first = resolved.first else { return nil }
         var commonComponents = first.deletingLastPathComponent().pathComponents
 
@@ -980,10 +1149,20 @@ enum CompressionSupport {
         return URL(fileURLWithPath: NSString.path(withComponents: commonComponents), isDirectory: true)
     }
 
+    /// Resolve intermediate symlinks such as `/var` → `/private/var`. Do not replace a symlink the user selected with its target.
+    private static func pathPreservingLeafSymlink(_ url: URL) -> URL {
+        let isLink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+        if isLink {
+            let parent = url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+            return parent.appendingPathComponent(url.lastPathComponent)
+        }
+        return url.resolvingSymlinksInPath().standardizedFileURL
+    }
+
     private static func relativePath(for url: URL, from directory: URL) -> String {
         // Resolve /var vs /private/var (and other symlink roots) so relative names stay correct.
         let directoryPath = directory.resolvingSymlinksInPath().standardizedFileURL.path
-        let sourcePath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let sourcePath = pathPreservingLeafSymlink(url).path
 
         let directoryPrefix = directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/"
         if sourcePath == directoryPath {

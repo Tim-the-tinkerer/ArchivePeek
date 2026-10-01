@@ -10,17 +10,25 @@ enum TempFileRegistry {
     static func registerExtractRoot(_ root: URL) {
         lock.lock()
         roots.append(root)
-        pruneOldestLocked(keeping: maxRoots)
+        pruneOldestLocked(keeping: maxRoots, preserve: previewRoot)
         lock.unlock()
     }
 
-    static func setPreviewRoot(_ root: URL) {
+    /// Keep the temp tree that contains `file`. Nested previews must preserve
+    /// the registered extract root, not only the file's parent directory.
+    static func setPreviewFile(_ file: URL) {
+        let path = file.standardizedFileURL.path
         lock.lock()
-        if let previous = previewRoot, previous != root {
+        let match = roots.first { root in
+            let rootPath = root.standardizedFileURL.path
+            return path == rootPath || path.hasPrefix(rootPath + "/")
+        }
+        let root = match ?? file.deletingLastPathComponent()
+        if let previous = previewRoot, previous.standardizedFileURL.path != root.standardizedFileURL.path {
             removeRootLocked(previous)
         }
         previewRoot = root
-        if !roots.contains(root) {
+        if !roots.contains(where: { $0.standardizedFileURL.path == root.standardizedFileURL.path }) {
             roots.append(root)
         }
         pruneOldestLocked(keeping: maxRoots, preserve: previewRoot)

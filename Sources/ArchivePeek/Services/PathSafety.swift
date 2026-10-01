@@ -55,6 +55,31 @@ enum PathSafety {
         return resolved
     }
 
+    /// Listing text such as `./sub/f.txt` is the member `sub/f.txt`.
+    /// A lone `.` is the archive root and is not a member. `..` is left in place so validation still rejects it.
+    static func normalizeListedPath(_ raw: String) -> String? {
+        let text = raw.replacingOccurrences(of: "\\", with: "/")
+        let parts = text.split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+            .filter { $0 != "." }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: "/")
+    }
+
+    /// Create folder members that have no files. File extraction does not make an empty directory.
+    static func createExtractedDirectories(
+        _ entries: [ArchiveEntry],
+        in destination: URL,
+        preservePaths: Bool
+    ) throws {
+        for entry in entries where entry.isDirectory {
+            let name = preservePaths ? entry.normalizedPath : entry.displayName
+            guard !name.isEmpty else { continue }
+            let url = try resolvedURL(forEntryPath: name, in: destination)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+    }
+
     static func validateEntries(_ entries: [ArchiveEntry]) throws {
         for entry in entries {
             try validateArchiveEntryPath(entry.path)
@@ -62,6 +87,8 @@ enum PathSafety {
     }
 
     /// After extract, remove link members that resolve outside `destination`.
+    /// Packages are walked too: a symlink inside a `.app` can still point outside.
+    /// Directory symlinks are not followed; the link itself is checked.
     static func enforceExtractContainment(
         in destination: URL,
         fileManager: FileManager = .default
@@ -71,15 +98,19 @@ enum PathSafety {
         guard let enumerator = fileManager.enumerator(
             at: destination,
             includingPropertiesForKeys: [.isSymbolicLinkKey],
-            options: [.skipsPackageDescendants]
+            options: []
         ) else { return }
 
         var escaped: [URL] = []
         for case let url as URL in enumerator {
             let isLink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-            let resolved = isLink
-                ? url.resolvingSymlinksInPath().standardizedFileURL
-                : url.standardizedFileURL
+            if isLink {
+                if symlinkEscapes(url, basePath: basePath, fileManager: fileManager) {
+                    escaped.append(url)
+                }
+                continue
+            }
+            let resolved = url.standardizedFileURL
             if resolved.path == basePath || resolved.path.hasPrefix(basePath + "/") {
                 continue
             }
@@ -91,6 +122,37 @@ enum PathSafety {
         if !escaped.isEmpty {
             throw ArchiveError.invalidEntryPath(escaped[0].lastPathComponent)
         }
+    }
+
+    /// Temp extract used by Open, Quick Look, and drag-out.
+    /// Runs containment first so a link to a file outside the temp tree is not opened.
+    static func containedExtractedFile(_ entryPath: String, in root: URL) throws -> URL {
+        try enforceExtractContainment(in: root)
+        let extracted = try resolvedURL(forEntryPath: entryPath, in: root)
+        let isLink = (try? extracted.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+        if isLink || FileManager.default.fileExists(atPath: extracted.path) {
+            return extracted
+        }
+        throw ArchiveError.entryNotFound(entryPath)
+    }
+
+    /// True when the link text, including a dangling target, lands outside `basePath`.
+    private static func symlinkEscapes(
+        _ url: URL,
+        basePath: String,
+        fileManager: FileManager
+    ) -> Bool {
+        guard let linkText = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
+            return true
+        }
+        if linkText.utf8.contains(0) { return true }
+        let parent = url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        let target = linkText.hasPrefix("/")
+            ? URL(fileURLWithPath: linkText)
+            : parent.appendingPathComponent(linkText)
+        let resolved = target.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL
+        let path = resolved.path
+        return !(path == basePath || path.hasPrefix(basePath + "/"))
     }
 
     /// Next unused directory `parent/base`, then `parent/base 2`, …

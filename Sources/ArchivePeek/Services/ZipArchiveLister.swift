@@ -125,11 +125,17 @@ enum ZipArchiveLister {
 
         for index in stride(from: tail.count - 22, through: 0, by: -1) {
             let signature = readUInt32(tail, at: index)
+            // A comment can contain the same 4 bytes. Only an EOCD whose comment
+            // length lands on EOF is real (APPNOTE). Zip64 is detected later from
+            // the 0xFFFF fields; a locator signature inside the comment is not one.
             if signature == zip64EndOfCentralDirectoryLocatorSignature {
-                throw ArchiveError.zipRequiresSevenZip
+                continue
             }
             if signature == endOfCentralDirectorySignature {
-                return start + UInt64(index)
+                let commentLength = Int(readUInt16(tail, at: index + 20))
+                if index + 22 + commentLength == tail.count {
+                    return start + UInt64(index)
+                }
             }
         }
 

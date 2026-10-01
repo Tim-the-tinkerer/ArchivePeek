@@ -4,6 +4,7 @@ enum DittoCompressBackend {
     static func compress(
         sources: [URL],
         to archive: URL,
+        compressionLevel: Int,
         handle: ProcessRunner.Handle? = nil,
         beforeCommit: ((URL) throws -> Void)? = nil,
         onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
@@ -62,7 +63,8 @@ enum DittoCompressBackend {
         var isDirectory: ObjCBool = false
         _ = FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory)
 
-        var arguments = ["-c", "-k", "--norsrc"]
+        let level = min(max(compressionLevel, 0), 9)
+        var arguments = ["-c", "-k", "--norsrc", "--zlibCompressionLevel", String(level)]
         if isDirectory.boolValue {
             arguments.append("--keepParent")
         }

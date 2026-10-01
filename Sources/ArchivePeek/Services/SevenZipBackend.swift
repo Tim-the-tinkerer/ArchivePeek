@@ -46,6 +46,7 @@ enum SevenZipBackend {
 
         var arguments = ["t", "-y"]
         arguments.append(contentsOf: passwordArguments(for: password))
+        arguments.append("--")
         arguments.append(url.path)
 
         let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
@@ -75,6 +76,7 @@ enum SevenZipBackend {
 
         var arguments = ["l", "-slt", "-ba", "-bd", "-bb0"]
         arguments.append(contentsOf: passwordArguments(for: password))
+        arguments.append("--")
         arguments.append(url.path)
 
         let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
@@ -84,11 +86,56 @@ enum SevenZipBackend {
             throw mapFailure(message, fallback: "7-Zip listing failed")
         }
 
-        var entries = parseListing(result.stdout)
+        let parsed = parseListing(result.stdout)
+        var entries = parsed.entries
+        if parsed.hasEncryptedEntry {
+            // ZipCrypto listings succeed with a wrong password. Test an encrypted member.
+            // The first file in the archive may be stored in the clear.
+            try confirmListedPassword(
+                at: url,
+                password: password,
+                samplePath: parsed.encryptedSamplePath,
+                handle: handle
+            )
+        }
         if entries.count > maxEntries {
             entries = Array(entries.prefix(maxEntries))
         }
         return entries
+    }
+
+    /// `t` fails when the password does not decrypt. Listing alone does not.
+    private static func confirmListedPassword(
+        at url: URL,
+        password: String?,
+        samplePath: String?,
+        handle: ProcessRunner.Handle?
+    ) throws {
+        guard let sevenZip = ToolLocator.sevenZipPath else {
+            throw ArchiveError.toolUnavailable("7-Zip")
+        }
+        // -spd: the member name is literal, so a name like `a*.txt` is not expanded
+        // onto an unencrypted neighbor that would accept any password.
+        var arguments = ["t", "-y", "-spd"]
+        arguments.append(contentsOf: passwordArguments(for: password))
+        arguments.append("--")
+        arguments.append(url.path)
+        if let samplePath, !samplePath.isEmpty {
+            arguments.append(samplePath)
+        }
+        let result = try ProcessRunner.run(
+            executable: sevenZip,
+            arguments: arguments,
+            environment: ["LC_ALL": "C"],
+            handle: handle
+        )
+        if result.wasCancelled { throw ArchiveError.cancelled }
+        let output = result.stdout + result.stderr
+        // A name that matches nothing still exits 0 ("No files to process").
+        // That must not count as the password decrypting a member.
+        if result.exitCode != 0 || output.localizedCaseInsensitiveContains("no files to process") {
+            throw ArchiveError.passwordRequired
+        }
     }
 
     static func extract(
@@ -115,7 +162,11 @@ enum SevenZipBackend {
             if handle?.wasCancelled == true { throw ArchiveError.cancelled }
             var arguments = [mode, "-y"]
             arguments.append(contentsOf: passwordArguments(for: password))
-            arguments.append(contentsOf: [archive.path, entry.path, "-o\(outputDirectory)"])
+            arguments.append("-o\(outputDirectory)")
+            // Names such as `-spf` are switches unless parsing stops first.
+            arguments.append("--")
+            arguments.append(archive.path)
+            arguments.append(entry.path)
 
             let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
             if result.wasCancelled { throw ArchiveError.cancelled }
@@ -123,7 +174,26 @@ enum SevenZipBackend {
                 let message = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
                 throw mapFailure(message, fallback: "7-Zip extraction failed")
             }
+            if extractionEscaped(entry, to: destination, preservePaths: preservePaths) {
+                try PathSafety.enforceExtractContainment(in: destination)
+            }
         }
+        try PathSafety.createExtractedDirectories(entries, in: destination, preservePaths: preservePaths)
+    }
+
+    /// True when this member is a symlink or its extracted path resolves outside `destination`.
+    private static func extractionEscaped(
+        _ entry: ArchiveEntry,
+        to destination: URL,
+        preservePaths: Bool
+    ) -> Bool {
+        let name = preservePaths ? entry.normalizedPath : entry.displayName
+        let placed = destination.appendingPathComponent(name)
+        let isLink = (try? placed.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+        let base = destination.resolvingSymlinksInPath().standardizedFileURL
+        let resolved = placed.resolvingSymlinksInPath().standardizedFileURL
+        let inside = resolved.path == base.path || resolved.path.hasPrefix(base.path + "/")
+        return isLink || !inside
     }
 
     static func extractAll(
@@ -140,7 +210,9 @@ enum SevenZipBackend {
         let outputDirectory = destination.path.hasSuffix("/") ? destination.path : destination.path + "/"
         var arguments = ["x", "-y"]
         arguments.append(contentsOf: passwordArguments(for: password))
-        arguments.append(contentsOf: [archive.path, "-o\(outputDirectory)"])
+        arguments.append("-o\(outputDirectory)")
+        arguments.append("--")
+        arguments.append(archive.path)
 
         let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
         if result.wasCancelled { throw ArchiveError.cancelled }
@@ -173,9 +245,14 @@ enum SevenZipBackend {
             try PathSafety.validateArchiveEntryPath(archiveFolder)
         }
 
-        let archivePath = archive.standardizedFileURL.path
         for source in sources {
-            if source.standardizedFileURL.path == archivePath {
+            let sourceIsLink = (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+            if sourceIsLink { continue }
+            if CompressionSupport.sameFile(source, archive)
+                || CompressionSupport.sameFile(
+                    source.resolvingSymlinksInPath(),
+                    archive.resolvingSymlinksInPath()
+                ) {
                 throw ArchiveError.commandFailed("Cannot add the open archive to itself.")
             }
         }
@@ -226,7 +303,8 @@ enum SevenZipBackend {
         if let password, !password.isEmpty {
             arguments.append(contentsOf: passwordArguments(for: password))
         }
-        arguments.append(contentsOf: CompressionSupport.macMetadataSevenZipExclusions.map { "-xr!\($0)" })
+        arguments.append(contentsOf: CompressionSupport.sevenZipExcludeSwitches())
+        arguments.append("--")
         arguments.append(destination.workURL.path)
         arguments.append(contentsOf: nested.itemNames)
 
@@ -310,6 +388,7 @@ enum SevenZipBackend {
             if let password, !password.isEmpty {
                 arguments.append(contentsOf: passwordArguments(for: password))
             }
+            arguments.append("--")
             arguments.append(destination.workURL.path)
             arguments.append(contentsOf: batch)
 
@@ -336,7 +415,8 @@ enum SevenZipBackend {
         }
 
         if format == .zip {
-            try CompressionSupport.stripMacJunkFromZip(at: destination.workURL)
+            // Removing a member must not also delete other files that match Exclusions.
+            try CompressionSupport.stripMacJunkFromZip(at: destination.workURL, removeCustomExclusions: false)
         }
 
         onProgress?(CompressionProgressUpdate(fraction: 0.92, message: "Verifying archive…", indeterminate: true))
@@ -406,8 +486,7 @@ enum SevenZipBackend {
         var seen = Set<String>()
         var result: [String] = []
         for path in paths {
-            let key = path.lowercased(with: Locale(identifier: "en_US_POSIX"))
-            if seen.insert(key).inserted {
+            if seen.insert(path).inserted {
                 result.append(path)
             }
         }
@@ -447,6 +526,8 @@ enum SevenZipBackend {
         ))
 
         if handle?.wasCancelled == true { throw ArchiveError.cancelled }
+
+        try CompressionSupport.removeStaleNestedArchives(archive: archive, sources: sources)
 
         let staged = try CompressionSupport.stageForSevenZip(
             sources,
@@ -511,8 +592,9 @@ enum SevenZipBackend {
             }
         }
 
-        arguments.append(contentsOf: CompressionSupport.macMetadataSevenZipExclusions.map { "-xr!\($0)" })
+        arguments.append(contentsOf: CompressionSupport.sevenZipExcludeSwitches())
 
+        arguments.append("--")
         arguments.append(destination.workURL.path)
         arguments.append(contentsOf: context.itemNames)
 
@@ -643,7 +725,10 @@ enum SevenZipBackend {
 
         var arguments = ["x", "-y"]
         arguments.append(contentsOf: passwordArguments(for: password))
-        arguments.append(contentsOf: [archive.path, "\(prefix)/*", "-o\(outputDirectory)"])
+        arguments.append("-o\(outputDirectory)")
+        arguments.append("--")
+        arguments.append(archive.path)
+        arguments.append("\(prefix)/*")
 
         let result = try ProcessRunner.run(executable: sevenZip, arguments: arguments, handle: handle)
         if result.wasCancelled { throw ArchiveError.cancelled }
@@ -672,25 +757,29 @@ enum SevenZipBackend {
             handle: handle
         )
 
-        let extracted = try PathSafety.resolvedURL(forEntryPath: entry.normalizedPath, in: tempRoot)
-        guard FileManager.default.fileExists(atPath: extracted.path) else {
-            throw ArchiveError.entryNotFound(entry.path)
-        }
-        return extracted
+        return try PathSafety.containedExtractedFile(entry.normalizedPath, in: tempRoot)
     }
 
     private static func fileManagerTemporaryDirectory() -> URL {
         URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
     }
 
-    private static func parseListing(_ text: String) -> [ArchiveEntry] {
+    private static func parseListing(_ text: String) -> (
+        entries: [ArchiveEntry],
+        hasEncryptedEntry: Bool,
+        encryptedSamplePath: String?
+    ) {
         var entries: [ArchiveEntry] = []
         var currentPath: String?
         var currentSize: Int64 = 0
         var currentPackedSize: Int64?
         var currentIsDirectory = false
         var sawAttributes = false
+        var sawEntryBody = false
         var currentModified: Date?
+        var currentEncrypted = false
+        var hasEncryptedEntry = false
+        var encryptedSamplePath: String?
 
         func resetCurrent() {
             currentPath = nil
@@ -698,13 +787,27 @@ enum SevenZipBackend {
             currentPackedSize = nil
             currentIsDirectory = false
             sawAttributes = false
+            sawEntryBody = false
             currentModified = nil
+            currentEncrypted = false
         }
 
         func flush() {
-            guard let path = currentPath, !path.isEmpty, sawAttributes else {
+            // Tar listings from 7-Zip have Folder and Mode, and no Attributes line.
+            // A block with only a path is not an entry. `./file` becomes `file`; a lone `.` is the archive root.
+            guard let rawPath = currentPath, !rawPath.isEmpty, sawEntryBody else {
                 resetCurrent()
                 return
+            }
+            guard let path = PathSafety.normalizeListedPath(rawPath) else {
+                resetCurrent()
+                return
+            }
+            if currentEncrypted {
+                hasEncryptedEntry = true
+                if !currentIsDirectory && encryptedSamplePath == nil {
+                    encryptedSamplePath = path
+                }
             }
             entries.append(
                 ArchiveEntry(
@@ -728,15 +831,46 @@ enum SevenZipBackend {
             }
             if line.hasPrefix("Size = ") {
                 currentSize = Int64(line.dropFirst("Size = ".count)) ?? 0
+                sawEntryBody = true
                 continue
             }
             if line.hasPrefix("Packed Size = ") {
                 currentPackedSize = Int64(line.dropFirst("Packed Size = ".count))
+                sawEntryBody = true
                 continue
             }
             if line.hasPrefix("Modified = ") {
                 let value = String(line.dropFirst("Modified = ".count))
                 currentModified = parseSevenZipDate(value)
+                sawEntryBody = true
+                continue
+            }
+            if line.hasPrefix("Encrypted = ") {
+                let value = String(line.dropFirst("Encrypted = ".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                currentEncrypted = value == "+"
+                sawEntryBody = true
+                continue
+            }
+            if line.hasPrefix("Folder = ") {
+                sawEntryBody = true
+                // Attributes wins for zip and 7z. Folder is the tar signal when Attributes is absent.
+                if !sawAttributes {
+                    let value = String(line.dropFirst("Folder = ".count))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    currentIsDirectory = value == "+"
+                }
+                continue
+            }
+            if line.hasPrefix("Mode = ") {
+                sawEntryBody = true
+                if !sawAttributes {
+                    let mode = String(line.dropFirst("Mode = ".count))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if mode.hasPrefix("d") || mode.hasPrefix("D") {
+                        currentIsDirectory = true
+                    }
+                }
                 continue
             }
             if line.hasPrefix("Attributes = ") {
@@ -747,11 +881,12 @@ enum SevenZipBackend {
                     || attributes.hasPrefix("D ")
                     || attributes.contains(" D")
                 sawAttributes = true
+                sawEntryBody = true
             }
         }
 
         flush()
-        return entries
+        return (entries, hasEncryptedEntry, encryptedSamplePath)
     }
 
     private static func parseSevenZipDate(_ value: String) -> Date? {

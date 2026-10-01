@@ -2,7 +2,7 @@ import Foundation
 
 enum TarBackend {
     private static let verboseLineRegex = try? NSRegularExpression(
-        pattern: #"^[drwxlst-]{10}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d{1,2}\s+(?:\d{2}:\d{2}(?::\d{2})?|\d{4}))\s+(.+)$"#
+        pattern: #"^[-bcdhlpswD][-rwxtsST]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d{1,2}\s+(?:\d{2}:\d{2}(?::\d{2})?|\d{4}))\s+(.+)$"#
     )
 
     static func canHandle(_ url: URL) -> Bool {
@@ -23,6 +23,7 @@ enum TarBackend {
         let result = try ProcessRunner.run(
             executable: bsdtar,
             arguments: ["-tvf", url.path],
+            environment: ["LC_ALL": "C"],
             handle: handle
         )
         if result.wasCancelled { throw ArchiveError.cancelled }
@@ -32,11 +33,19 @@ enum TarBackend {
         }
 
         var entries: [ArchiveEntry] = []
+        var skipped = 0
         for rawLine in result.stdout.split(whereSeparator: \.isNewline) {
             let line = String(rawLine)
-            guard let entry = parseTarLine(line) else { continue }
-            entries.append(entry)
-            if entries.count >= maxEntries { break }
+            if let entry = parseTarLine(line) {
+                entries.append(entry)
+                if entries.count >= maxEntries { break }
+            } else if !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                skipped += 1
+            }
+        }
+        // A day-first date line used to be dropped while Extract All still unpacked the archive.
+        if skipped > 0 {
+            throw ArchiveError.commandFailed("bsdtar listing could not be read")
         }
         return entries
     }
@@ -64,6 +73,7 @@ enum TarBackend {
                     arguments.append(contentsOf: ["--strip-components", String(stripCount)])
                 }
             }
+            arguments.append("--")
             arguments.append(entry.path)
 
             let result = try ProcessRunner.run(
@@ -77,6 +87,7 @@ enum TarBackend {
                 throw ArchiveError.commandFailed(message.isEmpty ? "bsdtar extraction failed" : message)
             }
         }
+        try PathSafety.createExtractedDirectories(entries, in: destination, preservePaths: preservePaths)
     }
 
     static func extractAll(
@@ -121,7 +132,7 @@ enum TarBackend {
 
         let result = try ProcessRunner.run(
             executable: bsdtar,
-            arguments: ["-xvf", archive.path, "-C", destination.path, prefix],
+            arguments: ["-xvf", archive.path, "-C", destination.path, "--", prefix],
             handle: handle
         )
         if result.wasCancelled { throw ArchiveError.cancelled }
@@ -142,11 +153,7 @@ enum TarBackend {
         TempFileRegistry.registerExtractRoot(tempRoot)
         try extract(entries: [entry], from: archive, to: tempRoot, preservePaths: true, handle: handle)
 
-        let extracted = try PathSafety.resolvedURL(forEntryPath: entry.normalizedPath, in: tempRoot)
-        guard FileManager.default.fileExists(atPath: extracted.path) else {
-            throw ArchiveError.entryNotFound(entry.path)
-        }
-        return extracted
+        return try PathSafety.containedExtractedFile(entry.normalizedPath, in: tempRoot)
     }
 
     private static func isCompressedTar(_ url: URL) -> Bool {
@@ -171,16 +178,22 @@ enum TarBackend {
         guard !path.isEmpty else { return nil }
 
         let typeFlag = line.first
-        // bsdtar prints symlinks as: "name -> target" in the path field.
-        if typeFlag == "l" || path.contains(" -> ") {
-            if let arrow = path.range(of: " -> ") {
-                path = String(path[..<arrow.lowerBound]).trimmingCharacters(in: .whitespaces)
-            }
-            guard !path.isEmpty else { return nil }
+        // Only a symlink line uses " -> ". A regular file may be named "foo -> bar.txt".
+        if typeFlag == "l", let arrow = path.range(of: " -> ") {
+            path = String(path[..<arrow.lowerBound]).trimmingCharacters(in: .whitespaces)
+        }
+        // Hard links are "name link to target".
+        if typeFlag == "h", let link = path.range(of: " link to ") {
+            path = String(path[..<link.lowerBound]).trimmingCharacters(in: .whitespaces)
+        }
+        guard let normalized = PathSafety.normalizeListedPath(path) else { return nil }
+        path = normalized
+
+        if typeFlag == "l" || typeFlag == "h" || typeFlag == "p" {
             return ArchiveEntry(
                 path: path,
                 isDirectory: false,
-                uncompressedSize: 0,
+                uncompressedSize: typeFlag == "l" || typeFlag == "p" ? 0 : size,
                 compressedSize: nil,
                 modified: modified
             )

@@ -7,12 +7,12 @@ cd "$(dirname "$0")"
 APP="${1:-ArchivePeek.app}"
 TOOLS_DIR="${APP}/Contents/Resources/Tools"
 
-# Pinned to the official 7-Zip 26.02 macOS release.
-SEVENZIP_VERSION="26.02"
-SEVENZIP_RELEASE_TAG="26.02"
-SEVENZIP_ARCHIVE="7z2602-mac.tar.xz"
+# Pinned to the official 7-Zip 26.03 macOS release.
+SEVENZIP_VERSION="26.03"
+SEVENZIP_RELEASE_TAG="26.03"
+SEVENZIP_ARCHIVE="7z2603-mac.tar.xz"
 SEVENZIP_URL="https://github.com/ip7z/7zip/releases/download/${SEVENZIP_RELEASE_TAG}/${SEVENZIP_ARCHIVE}"
-SEVENZIP_SHA256="1cf6760579502f87e591ff5c73a005ec50b3e4d6f507e8b038382d563c3175b9"
+SEVENZIP_SHA256="5ca87677072c59f5602e5c49baa27d4694bacd2259b4e507f0094249d4281480"
 
 CACHE_ROOT=".cache/sevenzip-${SEVENZIP_VERSION}"
 ARCHIVE_PATH="${CACHE_ROOT}/${SEVENZIP_ARCHIVE}"

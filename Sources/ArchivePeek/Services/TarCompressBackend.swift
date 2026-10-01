@@ -64,7 +64,7 @@ enum TarCompressBackend {
             arguments.append(format.bsdtarCompressionFlag)
         }
         arguments.append(contentsOf: ["-f", destination.workURL.path])
-        for pattern in CompressionSupport.macMetadataZipExclusions {
+        for pattern in CompressionSupport.tarAndZipExcludePatterns() {
             arguments.append("--exclude")
             arguments.append(pattern)
         }

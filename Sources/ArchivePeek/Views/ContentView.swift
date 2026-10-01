@@ -73,10 +73,12 @@ struct ContentView: View {
         .sheet(isPresented: $browser.needsPassword) {
             PasswordSheet()
                 .environmentObject(browser)
+                .interactiveDismissDisabled(true)
         }
         .sheet(isPresented: $browser.showCompressSheet) {
             CompressSheet()
                 .environmentObject(browser)
+                .interactiveDismissDisabled(true)
         }
         .sheet(isPresented: $browser.showHelpSheet) {
             HelpView()
@@ -243,7 +245,6 @@ struct ContentView: View {
                 .padding(24)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         }
-        .allowsHitTesting(false)
     }
 
     private var errorBinding: Binding<Bool> {

@@ -10,6 +10,9 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Keys.comicBookZip) private var comicBookZip = false
     @AppStorage(AppSettings.Keys.finderContextMenu) private var finderContextMenuEnabled = false
 
+    @State private var exclusionPatterns: [String] = []
+    @State private var exclusionDraft = ""
+    @State private var exclusionMessage: String?
     @State private var defaultAppSummary = ""
     @State private var defaultAppMessage: String?
     @State private var isSettingDefaultApp = false
@@ -28,7 +31,15 @@ struct SettingsView: View {
         )
     }
 
+    private var compressionLevelSelection: Binding<Int> {
+        Binding(
+            get: { AppSettings.normalizedCompressionLevel(compressionLevel) },
+            set: { compressionLevel = AppSettings.normalizedCompressionLevel($0) }
+        )
+    }
+
     var body: some View {
+        ScrollView {
         Form {
             Section {
                 Picker("Default format", selection: compressFormat) {
@@ -37,7 +48,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Picker("Default compression level", selection: $compressionLevel) {
+                Picker("Default compression level", selection: compressionLevelSelection) {
                     Text("Store").tag(0)
                     Text("Fast").tag(1)
                     Text("Normal").tag(5)
@@ -61,6 +72,56 @@ struct SettingsView: View {
                 Text("Compression")
             } footer: {
                 Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. Comic book ZIP saves a standard ZIP with a .cbz extension. DMG app installer layout is used when compressing .app bundles to DMG. Creating RAR archives requires WinRAR’s rar command; 7-Zip can still open RAR files.")
+            }
+
+            Section {
+                if exclusionPatterns.isEmpty {
+                    Text("No extra exclusions.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(exclusionPatterns, id: \.self) { pattern in
+                                HStack(spacing: 8) {
+                                    Text(pattern)
+                                        .font(.body.monospaced())
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer(minLength: 8)
+                                    Button {
+                                        AppSettings.removeCustomExclusion(pattern)
+                                        reloadExclusions()
+                                    } label: {
+                                        Image(systemName: "minus.circle")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(.secondary)
+                                    .help("Remove \(pattern)")
+                                    .accessibilityLabel("Remove \(pattern)")
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 140)
+                }
+
+                HStack(spacing: 8) {
+                    TextField("Name or pattern", text: $exclusionDraft)
+                        .onSubmit(addExclusion)
+                    Button("Add", action: addExclusion)
+                        .disabled(exclusionDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if let exclusionMessage {
+                    Text(exclusionMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Text("Exclusions")
+            } footer: {
+                Text("Left out of new archives and of files added to an open ZIP or 7z. A name matches anywhere: node_modules, .git, *.log. A path matches that sequence: dist/.staging or src/*.swift. * and ? are wildcards inside one name. ** matches any folders, as in logs/**. Matching ignores case. .DS_Store, ._* AppleDouble files, and __MACOSX are always removed and do not need to be listed. The list starts empty, so project files stay until you add a pattern.")
             }
 
             Section {
@@ -128,11 +189,34 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 520, idealWidth: 520, maxWidth: 520)
-        .frame(minHeight: 780, idealHeight: 780, maxHeight: 780)
+        }
+        .frame(minWidth: 520, idealWidth: 520, maxWidth: 560)
+        .frame(minHeight: 480, idealHeight: 680, maxHeight: 840)
         .onAppear {
+            let snapped = AppSettings.normalizedCompressionLevel(compressionLevel)
+            if snapped != compressionLevel {
+                compressionLevel = snapped
+            }
+            reloadExclusions()
             refreshDefaultAppStatus()
         }
+        .onChange(of: exclusionDraft) { _ in
+            exclusionMessage = nil
+        }
+    }
+
+    private func reloadExclusions() {
+        exclusionPatterns = AppSettings.customExclusionPatterns
+    }
+
+    private func addExclusion() {
+        if let message = AppSettings.addCustomExclusion(exclusionDraft) {
+            exclusionMessage = message
+        } else {
+            exclusionDraft = ""
+            exclusionMessage = nil
+        }
+        reloadExclusions()
     }
 
     private func refreshDefaultAppStatus() {

@@ -59,7 +59,9 @@ enum SplitArchive {
         if let set = rarOldSet(named: name, in: directory, fileManager: fileManager) {
             return set
         }
-        return primaryFileSet(named: name, in: directory, fileManager: fileManager)
+        // `archive.7z.001` and `archive.part1.rar` are opened under those names.
+        // A plain `archive.7z` or `archive.rar` beside them is a different file.
+        return nil
     }
 
     static func canonicalURL(for url: URL, fileManager: FileManager = .default) -> URL {
@@ -71,7 +73,9 @@ enum SplitArchive {
         var result: [URL] = []
         for url in urls {
             let canonical = canonicalURL(for: url, fileManager: fileManager)
-            let key = canonical.path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            let key = volumeIsCaseSensitive(canonical)
+                ? canonical.path
+                : canonical.path.lowercased(with: Locale(identifier: "en_US_POSIX"))
             if seen.insert(key).inserted {
                 result.append(canonical)
             }
@@ -92,7 +96,7 @@ enum SplitArchive {
         let width = string(in: name, match: match, group: 2).count
         let pattern = try? NSRegularExpression(
             pattern: "^\(NSRegularExpression.escapedPattern(for: stem))\\.part(\\d+)\\.\(NSRegularExpression.escapedPattern(for: ext))$",
-            options: [.caseInsensitive]
+            options: nameOptions(in: directory)
         )
         let found = listedMatches(pattern, in: directory, fileManager: fileManager) { text, match in
             Int(string(in: text, match: match, group: 1))
@@ -103,12 +107,12 @@ enum SplitArchive {
         let volumes = found.map(\.url).sorted {
             $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
         }
-        let all = volumes.contains(where: { $0.lastPathComponent.lowercased() == first.lastPathComponent.lowercased() })
+        let all = volumes.contains(where: { namesEqual($0.lastPathComponent, first.lastPathComponent, in: directory) })
             ? volumes
             : [first] + volumes
         return SplitArchiveSet(
             firstVolume: first,
-            volumes: uniqued(all),
+            volumes: uniqued(all, in: directory),
             innerFormat: label(forExtension: ext),
             displayStem: stem
         )
@@ -127,7 +131,7 @@ enum SplitArchive {
         guard !base.isEmpty else { return nil }
         let pattern = try? NSRegularExpression(
             pattern: "^\(NSRegularExpression.escapedPattern(for: base))\\.(\\d{3})$",
-            options: [.caseInsensitive]
+            options: nameOptions(in: directory)
         )
         let found = listedMatches(pattern, in: directory, fileManager: fileManager) { text, match in
             Int(string(in: text, match: match, group: 1))
@@ -136,12 +140,12 @@ enum SplitArchive {
         let first = existingFile(named: firstName, in: directory, fileManager: fileManager)
             ?? directory.appendingPathComponent(firstName)
         let volumes = found.sorted { $0.number < $1.number }.map(\.url)
-        let all = volumes.contains(where: { $0.lastPathComponent.lowercased() == first.lastPathComponent.lowercased() })
+        let all = volumes.contains(where: { namesEqual($0.lastPathComponent, first.lastPathComponent, in: directory) })
             ? volumes
             : [first] + volumes
         return SplitArchiveSet(
             firstVolume: first,
-            volumes: uniqued(all),
+            volumes: uniqued(all, in: directory),
             innerFormat: innerFormat(forNumericBase: base),
             displayStem: displayStem(forBase: base)
         )
@@ -170,7 +174,7 @@ enum SplitArchive {
             ?? directory.appendingPathComponent(zipName)
         let pattern = try? NSRegularExpression(
             pattern: "^\(NSRegularExpression.escapedPattern(for: stem))\\.z(\\d{2})$",
-            options: [.caseInsensitive]
+            options: nameOptions(in: directory)
         )
         let pieces = listedMatches(pattern, in: directory, fileManager: fileManager) { text, match in
             Int(string(in: text, match: match, group: 1))
@@ -181,7 +185,7 @@ enum SplitArchive {
         }
         return SplitArchiveSet(
             firstVolume: first,
-            volumes: uniqued(volumes),
+            volumes: uniqued(volumes, in: directory),
             innerFormat: "ZIP",
             displayStem: stem
         )
@@ -211,7 +215,7 @@ enum SplitArchive {
             ?? directory.appendingPathComponent(rarName)
         let pattern = try? NSRegularExpression(
             pattern: "^\(NSRegularExpression.escapedPattern(for: stem))\\.r(\\d{2})$",
-            options: [.caseInsensitive]
+            options: nameOptions(in: directory)
         )
         let pieces = listedMatches(pattern, in: directory, fileManager: fileManager) { text, match in
             Int(string(in: text, match: match, group: 1))
@@ -220,40 +224,10 @@ enum SplitArchive {
         volumes = volumes.filter { fileManager.fileExists(atPath: $0.path) || $0 == first }
         return SplitArchiveSet(
             firstVolume: first,
-            volumes: uniqued(volumes),
+            volumes: uniqued(volumes, in: directory),
             innerFormat: "RAR",
             displayStem: stem
         )
-    }
-
-    /// Opening `archive.zip` / `archive.7z` / `archive.rar` when extra volumes sit beside it.
-    private static func primaryFileSet(
-        named name: String,
-        in directory: URL,
-        fileManager: FileManager
-    ) -> SplitArchiveSet? {
-        let ext = (name as NSString).pathExtension.lowercased()
-        let stem = String(name.dropLast(ext.count + (ext.isEmpty ? 0 : 1)))
-        guard !stem.isEmpty else { return nil }
-
-        if ext == "zip" {
-            return zipZnnSet(named: name, in: directory, fileManager: fileManager)
-        }
-        if ext == "rar" {
-            for candidate in ["\(stem).part1.rar", "\(stem).part01.rar", "\(stem).part001.rar"] {
-                if let file = existingFile(named: candidate, in: directory, fileManager: fileManager),
-                   let set = partSet(named: file.lastPathComponent, in: directory, fileManager: fileManager) {
-                    return set
-                }
-            }
-            return rarOldSet(named: name, in: directory, fileManager: fileManager)
-        }
-        if ext == "7z" {
-            if let firstPiece = existingFile(named: "\(name).001", in: directory, fileManager: fileManager) {
-                return numericSet(named: firstPiece.lastPathComponent, in: directory, fileManager: fileManager)
-            }
-        }
-        return nil
     }
 
     // MARK: - Helpers
@@ -293,11 +267,14 @@ enum SplitArchive {
         String(format: "%0\(width)d", value)
     }
 
-    private static func uniqued(_ urls: [URL]) -> [URL] {
+    private static func uniqued(_ urls: [URL], in directory: URL) -> [URL] {
+        let caseSensitive = volumeIsCaseSensitive(directory)
         var seen = Set<String>()
         var result: [URL] = []
         for url in urls {
-            let key = url.path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            let key = caseSensitive
+                ? url.path
+                : url.path.lowercased(with: Locale(identifier: "en_US_POSIX"))
             if seen.insert(key).inserted {
                 result.append(url)
             }
@@ -310,6 +287,8 @@ enum SplitArchive {
         if fileManager.fileExists(atPath: candidate.path) {
             return candidate.standardizedFileURL
         }
+        // On a case-sensitive disk, Backup.7z.001 and backup.7z.001 are different files.
+        if volumeIsCaseSensitive(directory) { return nil }
         guard let items = try? fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil,
@@ -321,6 +300,20 @@ enum SplitArchive {
         return items.first {
             $0.lastPathComponent.lowercased(with: Locale(identifier: "en_US_POSIX")) == lower
         }?.standardizedFileURL
+    }
+
+    private static func nameOptions(in directory: URL) -> NSRegularExpression.Options {
+        volumeIsCaseSensitive(directory) ? [] : [.caseInsensitive]
+    }
+
+    private static func namesEqual(_ lhs: String, _ rhs: String, in directory: URL) -> Bool {
+        if volumeIsCaseSensitive(directory) { return lhs == rhs }
+        return lhs.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            == rhs.lowercased(with: Locale(identifier: "en_US_POSIX"))
+    }
+
+    private static func volumeIsCaseSensitive(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]).volumeSupportsCaseSensitiveNames) == true
     }
 
     private static func listedMatches(

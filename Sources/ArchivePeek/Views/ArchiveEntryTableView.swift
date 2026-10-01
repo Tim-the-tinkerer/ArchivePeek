@@ -280,10 +280,6 @@ struct ArchiveEntryTableView: NSViewRepresentable {
             if newSelection != parent.selection {
                 parent.selection = newSelection
             }
-
-            for row in tableView.selectedRowIndexes where row >= 0 && row < entries.count {
-                parent.onPrepareDragOut(entries[row])
-            }
         }
 
         func syncSelectionToTable() {
@@ -314,9 +310,8 @@ struct ArchiveEntryTableView: NSViewRepresentable {
                 return url as NSURL
             }
 
-            if dragDelegates.count > 32 {
-                dragDelegates.removeAll()
-            }
+            // NSFilePromiseProvider.delegate is weak. Dropping these before the drag
+            // ends makes Finder call writePromiseTo on a nil delegate, so the file never appears.
             let delegate = ArchiveEntryDragDelegate(entry: entry) { [weak self] entry, url, completion in
                 self?.parent.writeDraggedEntry(entry, url, completion)
             }
@@ -333,6 +328,15 @@ struct ArchiveEntryTableView: NSViewRepresentable {
             for row in rowIndexes where row >= 0 && row < entries.count {
                 parent.onPrepareDragOut(entries[row])
             }
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            draggingSession: NSDraggingSession,
+            endedAt screenPoint: NSPoint,
+            operation: NSDragOperation
+        ) {
+            dragDelegates.removeAll()
         }
 
         func tableView(
@@ -547,8 +551,9 @@ private final class ArchiveEntryDragDelegate: NSObject, NSFilePromiseProviderDel
         writePromiseTo url: URL,
         completionHandler: @escaping (Error?) -> Void
     ) {
-        let destination = url.appendingPathComponent(entry.displayName)
-        onWrite(entry, destination, completionHandler)
+        // `url` already includes the name from fileNameForType. Appending it again
+        // writes one level too deep and Finder never receives the file.
+        onWrite(entry, url, completionHandler)
     }
 }
 

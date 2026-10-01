@@ -32,6 +32,7 @@ struct PasswordSheet: View {
                     browser.closeArchive()
                     dismiss()
                 }
+                .keyboardShortcut(.cancelAction)
                 Button("Unlock") {
                     browser.unlockArchiveWithPassword()
                 }

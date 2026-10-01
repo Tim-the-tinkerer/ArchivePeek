@@ -5,6 +5,8 @@ struct CompressSheet: View {
     @EnvironmentObject private var browser: ArchiveBrowserModel
     @Environment(\.dismiss) private var dismiss
     @State private var isDropTargeted = false
+    /// False after the user flips the installer toggle, so later file changes do not override that choice.
+    @State private var dmgInstallerFollowsDefault = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -112,7 +114,7 @@ struct CompressSheet: View {
 
             if browser.compressFormat.isDmg {
                 if browser.canCreateDmgAppInstaller {
-                    Toggle(isOn: $browser.compressDmgAppInstaller) {
+                    Toggle(isOn: dmgInstallerBinding) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("App installer layout")
                             Text("Adds an Applications folder shortcut so users can drag the app to install.")
@@ -126,6 +128,11 @@ struct CompressSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Text("Names in Settings → Exclusions are left out of the archive.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Toggle(isOn: $browser.verifyAfterCompress) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -145,6 +152,7 @@ struct CompressSheet: View {
                     browser.closeCompressSheet()
                     dismiss()
                 }
+                .keyboardShortcut(.cancelAction)
                 Button("Create Archive…") {
                     browser.chooseCompressDestination()
                 }
@@ -157,15 +165,10 @@ struct CompressSheet: View {
         .padding(24)
         .frame(width: 480)
         .onAppear {
-            // Sheet can open with ZIP/7z while a DMG-only setting left the installer flag on.
-            if !browser.compressFormat.isDmg || !browser.canCreateDmgAppInstaller {
-                browser.compressDmgAppInstaller = false
-            }
+            applyDmgInstallerDefault()
         }
         .onChange(of: browser.compressFormat) { format in
-            if !format.isDmg {
-                browser.compressDmgAppInstaller = false
-            }
+            applyDmgInstallerDefault()
             if !format.isZip {
                 browser.compressSaveAsComicBookZip = false
             }
@@ -182,21 +185,39 @@ struct CompressSheet: View {
             }
         }
         .onChange(of: browser.compressSources.map(\.path)) { _ in
-            if !browser.canCreateDmgAppInstaller {
-                browser.compressDmgAppInstaller = false
-            }
+            applyDmgInstallerDefault()
         }
         .fileDropDestination(
             isTargeted: $isDropTargeted,
             title: "Drop Files or Folders",
             subtitle: "Dropped items will be added to this archive."
         ) { urls in
-            let items = urls.filter { !ArchiveFormatCatalog.isArchive($0) }
+            let items = urls.map(\.standardizedFileURL)
             if items.isEmpty {
-                browser.errorMessage = "Drop files or folders to compress, not archives."
+                browser.errorMessage = "Drop files or folders to compress."
             } else {
                 browser.mergeCompressSourcesFromDrop(items)
             }
+        }
+    }
+
+    /// The installer option is DMG-only and needs an .app. Follow the Settings default until the user changes the toggle.
+    private var dmgInstallerBinding: Binding<Bool> {
+        Binding(
+            get: { browser.compressDmgAppInstaller },
+            set: { newValue in
+                dmgInstallerFollowsDefault = false
+                browser.compressDmgAppInstaller = newValue
+            }
+        )
+    }
+
+    private func applyDmgInstallerDefault() {
+        let allowed = browser.compressFormat.isDmg && browser.canCreateDmgAppInstaller
+        if dmgInstallerFollowsDefault {
+            browser.compressDmgAppInstaller = allowed && AppSettings.defaultDmgAppInstaller
+        } else if !allowed {
+            browser.compressDmgAppInstaller = false
         }
     }
 

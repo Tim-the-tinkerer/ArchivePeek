@@ -177,13 +177,35 @@ enum DmgCompressBackend {
         // • multi-source and app-installer layouts share the same prepare path
         // • cancel can clean a dedicated staging tree
         let staging = try makeStagingDirectory()
+        let exclusions = ArchiveExclusions.Matcher(patterns: AppSettings.customExclusionPatterns)
         for source in standardized {
             if isCancelled?() == true {
                 try? FileManager.default.removeItem(at: staging)
                 throw ArchiveError.cancelled
             }
+            if CompressionSupport.shouldOmitFromArchive(source.lastPathComponent, exclusions: exclusions) {
+                continue
+            }
             let destination = staging.appendingPathComponent(source.lastPathComponent)
             try copyItem(from: source, to: destination)
+            // Do not walk a copied symlink — fileExists follows links and would prune the target.
+            let isSymlink = (try? destination.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+            var isDirectory: ObjCBool = false
+            if !isSymlink,
+               FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                try CompressionSupport.pruneStagedTree(destination, exclusions: exclusions)
+            }
+        }
+
+        let payload = (try? FileManager.default.contentsOfDirectory(
+            at: staging,
+            includingPropertiesForKeys: nil,
+            options: []
+        )) ?? []
+        if payload.isEmpty {
+            try? FileManager.default.removeItem(at: staging)
+            throw ArchiveError.commandFailed("Nothing to compress after preparing files.")
         }
 
         if appInstallerLayout {
@@ -217,6 +239,12 @@ enum DmgCompressBackend {
     private static func copyItem(from source: URL, to destination: URL) throws {
         if FileManager.default.fileExists(atPath: destination.path) {
             try FileManager.default.removeItem(at: destination)
+        }
+
+        if (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+            let linkText = try FileManager.default.destinationOfSymbolicLink(atPath: source.path)
+            try FileManager.default.createSymbolicLink(atPath: destination.path, withDestinationPath: linkText)
+            return
         }
 
         if let ditto = ToolLocator.dittoPath {

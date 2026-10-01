@@ -40,7 +40,24 @@ final class SevenZipProgressParser: @unchecked Sendable {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        if let percent = Self.parsePercent(trimmed) {
+        // File lines can contain "100%" in the name. Handle those before any percent match.
+        if trimmed.hasPrefix("+ ") {
+            indeterminate = false
+            processedFiles += 1
+            let name = String(trimmed.dropFirst(2))
+            // Prefer leaf name so long .build paths stay readable in the status line.
+            let leaf = (name as NSString).lastPathComponent
+            message = "Compressing \(leaf.isEmpty ? name : leaf)…"
+            if let totalFiles, totalFiles > 0 {
+                let ratio = min(1.0, Double(processedFiles) / Double(totalFiles))
+                fraction = max(fraction, ratio * 0.98)
+            } else {
+                fraction = max(fraction, min(0.98, fraction + 0.005))
+            }
+            return true
+        }
+
+        if let percent = Self.parsePercent(trimmed), !trimmed.contains("/") {
             indeterminate = false
             fraction = max(fraction, Double(percent) / 100.0)
             message = "Compressing… \(percent)%"
@@ -70,22 +87,6 @@ final class SevenZipProgressParser: @unchecked Sendable {
             indeterminate = false
             fraction = max(fraction, 0.02)
             message = "Compressing…"
-            return true
-        }
-
-        if trimmed.hasPrefix("+ ") {
-            indeterminate = false
-            processedFiles += 1
-            let name = String(trimmed.dropFirst(2))
-            // Prefer leaf name so long .build paths stay readable in the status line.
-            let leaf = (name as NSString).lastPathComponent
-            message = "Compressing \(leaf.isEmpty ? name : leaf)…"
-            if let totalFiles, totalFiles > 0 {
-                let ratio = min(1.0, Double(processedFiles) / Double(totalFiles))
-                fraction = max(fraction, ratio * 0.98)
-            } else {
-                fraction = max(fraction, min(0.98, fraction + 0.005))
-            }
             return true
         }
 

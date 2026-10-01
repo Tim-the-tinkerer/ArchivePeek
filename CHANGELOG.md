@@ -2,6 +2,65 @@
 
 All notable changes to ArchivePeek are documented in this file.
 
+## [1.0.38] — 2026-10-01
+
+### Fixed
+- **TAR archives** — a tar whose paths are listed as `./file` opens and extracts. Hard links and fifos stay in the list. Empty folders are created on extract.
+- **Failed extract** — if extraction stops partway through, links that point outside the destination are still removed.
+- **Delete** — removing `Readme` does not also remove `readme` when those are different members.
+- **Exclusions** — `src/*.swift` no longer drops files in nested folders, and it applies when the folder being compressed is `src` itself. Cleaning macOS junk no longer deletes a file named `notes.DS_Store`.
+- **Archive inside a folder** — saving over an archive that already sits in a subfolder is refused for 7z and RAR as well, including when a symlink is the parent of that folder.
+- **Drag out** — dragging many files keeps every file. Selecting rows no longer copies them all into a temporary folder.
+- **Password and Create Archive** — Escape cancels those sheets. A cancelled create does not keep the previous file list, and a cancelled password prompt does not leave the archive locked.
+- **Busy state** — clicks and keys do not start another extract, open, or preview while one is already running.
+- **Finder** — Extract Here and Create Archive from a cold start run once. Opening several archives keeps the first and says the others were not opened.
+- **Default app** — Settings no longer reports ArchivePeek as the default archive app only because it owns its private file type.
+- **Progress** — the bar does not jump backward while an archive is created, updated, or edited.
+- **Split volumes** — on a case-sensitive disk, replacing `Backup.7z` does not delete `backup.7z.001`.
+
+## [1.0.37] — 2026-10-01
+
+### Fixed
+- **Mixed ZIP passwords** — a wrong password no longer opens an archive that stores some files in the clear. The password is checked against an encrypted member.
+- **Finder Extract Here** — cancelling that extract, or opening another archive while it runs, no longer clears the busy state of the operation that replaced it.
+- **Extract names that differ only by case** — `Readme` and `readme` in the same archive are both extracted.
+
+## [1.0.36] — 2026-10-01
+
+### Fixed
+- **Open, Quick Look, and drag-out** — a symlink inside an archive that points outside the extract folder is removed and the operation fails, including links stored inside an `.app` bundle. A link that stays inside the archive still opens.
+- **Compress a dangling symlink** — creating an archive from a symlink whose target is missing keeps the link instead of failing with “could not find”. Finder → Create Archive accepts those items too.
+- **Truncated archives** — extracting a folder from a listing that hit the entry limit is refused, with a message to extract individual files. Extract All already refused this case.
+- **ZIP comment** — a comment that happens to contain the end-of-directory signature is no longer parsed as the directory. The archive still opens.
+- **Settings** — a saved compression level other than Store, Fast, Normal, or Maximum shows the nearest choice. The Settings window scrolls on a shorter display so About and Check for Updates stay reachable.
+- **Quick Look** — previewing a file in a subfolder no longer points cleanup at that subfolder, so a later extract does not delete the file Quick Look is showing.
+- **Drag out of an archive** — a file that takes a moment to extract is written where Finder asked, so the drop is not nested one folder too deep.
+- **DMG app installer** — the Settings default turns on in Create Archive once an `.app` is in the list.
+- **Create Archive drop** — an archive dropped on the sheet is included as a file. A file dropped together with an archive onto the window is added to that archive after it opens.
+- **Progress** — a filename that contains `100%` no longer fills the 7-Zip progress bar, and ZIP progress counts every file in a batch.
+- **Default app** — Set as Default no longer claims document and book types such as `.odt` and `.epub`.
+- **Updates** — a pre-release tag such as `1.0.35-beta` is not treated as newer than `1.0.35`.
+- **Passwords** — a wrong password no longer opens an encrypted ZIP. The archive stays locked until the password decrypts a member.
+- **Extract names** — a member named like a tool switch (`-spf`, `-P`) is extracted as that name. It is not applied as a 7-Zip or tar option.
+- **TAR listing** — dates are read in the C locale, so a day-first clock no longer hides the file list.
+- **Finder Extract Here** — an encrypted archive in a multi-file selection no longer causes a different archive to extract, and the remaining archives continue after the password.
+- **Busy state** — cancelling one extract, open, or preview no longer clears the busy flag of the operation that replaced it.
+- **Symlinks when compressing** — a selected symlink is stored as a link. ZIP uses `zip -y`, and a single symlink no longer goes through ditto, which was following the target. DMG staging copies the link text.
+- **Exclusions** — wildcard patterns are applied while staging. They are not also handed to zip and tar, which treat `*` as crossing folders. Deleting a file from a ZIP no longer removes other members that match the exclusion list. `?` matches one character, and a pattern such as `café*` matches `Café.txt`.
+- **Single-item ZIP** — ditto uses the chosen compression level.
+- **Replacing a split archive** — saving a single `Name.7z`, `Name.zip`, or `Name.rar` removes leftover volumes (`Name.7z.001`, `Name.z01`, `Name.part1.rar`, `Name.r00`). Opening the new file opens that file. A real spanned ZIP (`Name.zip` + `Name.z01`) or old RAR (`Name.rar` + `Name.r00`) still opens as one set.
+- **Archive inside its source folder** — on a case-insensitive disk, `Project` and `project` are the same folder, so the archive is not copied into itself.
+
+## [1.0.35] — 2026-10-01
+
+### Added
+- **Custom exclusions** — Settings → Exclusions. Names and patterns (`node_modules`, `.git`, `*.log`, `dist/.staging`, `logs/**`) are left out when creating an archive or adding files to an open ZIP or 7z. macOS junk is still always removed. The list starts empty, so projects stay complete until you add a pattern.
+
+## [1.0.34] — 2026-10-01
+
+### Changed
+- **Bundled 7-Zip 26.03** — updated from 26.02. Improves Joliet ISO and Compound archive support, and includes the bug fixes from that release.
+
 ## [1.0.33] — 2026-09-15
 
 ### Fixed

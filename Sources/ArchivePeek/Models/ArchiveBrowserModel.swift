@@ -57,9 +57,15 @@ final class ArchiveBrowserModel: ObservableObject {
     private var compressAccessTokens: [SecurityScopedAccess.Token] = []
     private var compressGeneration = 0
     private var pendingFinderExtract = false
+    private var pendingFinderExtractURL: URL?
+    private var pendingFinderExtractRest: [URL] = []
     private var pendingAddURLs: [URL] = []
     private var pendingAddTokens: [SecurityScopedAccess.Token] = []
+    /// Files dropped together with an archive, added once that archive has loaded.
+    private var pendingMixedDropURLs: [URL] = []
+    private var pendingMixedDropTokens: [SecurityScopedAccess.Token] = []
     private var pendingRemoveEntries: [ArchiveEntry] = []
+    private var pendingMultiOpenNote: String?
 
     init() {
         AppSettings.applyCompressionDefaults(to: self)
@@ -138,8 +144,12 @@ final class ArchiveBrowserModel: ObservableObject {
         showRemoveConfirmation = false
         showAddReplaceConfirmation = false
         pendingFinderExtract = false
+        pendingFinderExtractURL = nil
+        pendingFinderExtractRest = []
         pendingRemoveEntries = []
+        pendingMultiOpenNote = nil
         clearPendingAdd()
+        clearPendingMixedDrop()
 
         rebuildFolderIndex()
         statusMessage = "Open an archive to browse its contents."
@@ -158,6 +168,11 @@ final class ArchiveBrowserModel: ObservableObject {
 
         let standardized = url.standardizedFileURL
         let canonical = ArchiveFormatCatalog.canonicalArchiveURL(for: standardized)
+        if pendingFinderExtractURL?.path != canonical.path {
+            pendingFinderExtract = false
+            pendingFinderExtractURL = nil
+            pendingFinderExtractRest = []
+        }
         if canonical.path.compare(standardized.path, options: [.caseInsensitive, .literal]) != .orderedSame,
            !FileManager.default.fileExists(atPath: canonical.path) {
             archiveURL = nil
@@ -168,6 +183,7 @@ final class ArchiveBrowserModel: ObservableObject {
             return
         }
 
+        clearPendingMixedDrop()
         archiveURL = canonical
         currentPath = ""
         selection.removeAll()
@@ -184,6 +200,8 @@ final class ArchiveBrowserModel: ObservableObject {
 
     /// Start a cancellable archive operation (extract / open / verify / preview).
     private func beginOperationHandle() -> ProcessRunner.Handle {
+        // Bump first so the operation we just cancelled cannot clear this one's busy flag.
+        operationGeneration += 1
         operationHandle?.cancel()
         let handle = ProcessRunner.Handle()
         operationHandle = handle
@@ -244,11 +262,38 @@ final class ArchiveBrowserModel: ObservableObject {
                 needsPassword = false
                 passwordErrorMessage = nil
                 statusMessage = result.summary
-                if pendingFinderExtract {
+                if let note = pendingMultiOpenNote {
+                    pendingMultiOpenNote = nil
+                    statusMessage = "\(result.summary) \(note)"
+                }
+                let mixedDropURLs = pendingMixedDropURLs
+                let mixedDropTokens = pendingMixedDropTokens
+                clearPendingMixedDrop()
+                if !mixedDropURLs.isEmpty {
+                    let openedName = requestURL.lastPathComponent
+                    Task { @MainActor in
+                        guard self.archiveURL == requestURL else { return }
+                        if self.canMutateOpenArchive {
+                            self.requestAddToOpenArchive(mixedDropURLs, tokens: mixedDropTokens)
+                        } else {
+                            let reason = self.mutationUnavailableReason
+                                ?? "This archive cannot be modified."
+                            self.errorMessage = "Opened \(openedName). \(mixedDropURLs.count) other item(s) were not added. \(reason)"
+                        }
+                    }
+                }
+                let continueFinderExtract = pendingFinderExtract && pendingFinderExtractURL?.path == requestURL.path
+                let finderExtractRest = continueFinderExtract ? pendingFinderExtractRest : []
+                if continueFinderExtract {
                     pendingFinderExtract = false
+                    pendingFinderExtractURL = nil
+                    pendingFinderExtractRest = []
                     let parent = requestURL.deletingLastPathComponent()
                     let tokens = SecurityScopedAccess.captureTokens(for: [parent])
                     await self.extractAllToNamedFolder(in: parent, destinationTokens: tokens)
+                    if !finderExtractRest.isEmpty {
+                        await self.extractFinderArchives(finderExtractRest, extraTokens: [])
+                    }
                 }
             } catch ArchiveError.cancelled {
                 guard generation == loadGeneration else { return }
@@ -285,6 +330,7 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func openSelectedEntry() {
+        guard !isBusy else { return }
         guard let entry = selectedVisibleEntries().first else {
             errorMessage = "Select a file or folder to open."
             return
@@ -298,6 +344,7 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func openEntry(_ entry: ArchiveEntry) {
+        guard !isBusy else { return }
         if entry.isDirectory {
             navigateTo(path: entry.normalizedPath)
             return
@@ -306,12 +353,13 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func extractSelected(preservePaths: Bool = false) {
-        guard listing != nil else { return }
+        guard listing != nil, !isBusy else { return }
         let selectedEntries = selectedVisibleEntries().map { canonicalEntry(for: $0) }
         guard !selectedEntries.isEmpty else {
             errorMessage = "Select one or more items to extract."
             return
         }
+        if refuseTruncatedFolderExtract(selectedEntries) { return }
         let hasFolders = selectedEntries.contains(where: \.isDirectory)
         chooseDestination { destination, tokens in
             Task {
@@ -326,8 +374,9 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func extractEntry(_ entry: ArchiveEntry, preservePaths: Bool = false) {
-        guard listing != nil else { return }
+        guard listing != nil, !isBusy else { return }
         let canonical = canonicalEntry(for: entry)
+        if refuseTruncatedFolderExtract([canonical]) { return }
         chooseDestination { destination, tokens in
             Task {
                 await self.extract(
@@ -341,14 +390,14 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func extractAll() {
-        guard archiveURL != nil else { return }
+        guard archiveURL != nil, !isBusy else { return }
         chooseDestination { destination, tokens in
             Task { await self.extractAll(to: destination, destinationTokens: tokens) }
         }
     }
 
     func extractAllToFolder() {
-        guard archiveURL != nil else { return }
+        guard archiveURL != nil, !isBusy else { return }
         chooseDestination { destination, tokens in
             Task { await self.extractAllToNamedFolder(in: destination, destinationTokens: tokens) }
         }
@@ -372,8 +421,9 @@ final class ArchiveBrowserModel: ObservableObject {
     func handleFinderCreate(_ urls: [URL], tokens: [SecurityScopedAccess.Token] = []) {
         FinderServices.log("handleFinderCreate \(urls.map(\.path).joined(separator: ", "))")
         let items = urls.map(\.standardizedFileURL).filter { url in
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            if FileManager.default.fileExists(atPath: url.path) { return true }
+            // Dangling symlinks are real items; fileExists follows the link and misses them.
+            return (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
         }
         guard !items.isEmpty else {
             errorMessage = urls.isEmpty
@@ -440,7 +490,13 @@ final class ArchiveBrowserModel: ObservableObject {
             }
 
             let handle = beginOperationHandle()
+            let generation = operationGeneration
             isLoading = true
+            defer {
+                if generation == operationGeneration {
+                    isLoading = false
+                }
+            }
             statusMessage = "Extracting \(source.lastPathComponent)…"
             do {
                 try await ArchiveEngine.extractAll(
@@ -449,20 +505,28 @@ final class ArchiveBrowserModel: ObservableObject {
                     password: nil,
                     handle: handle
                 )
-                isLoading = false
+                guard generation == operationGeneration else { return }
                 revealed.append(folder)
             } catch ArchiveError.passwordRequired {
-                isLoading = false
+                guard generation == operationGeneration else { return }
                 pendingFinderExtract = true
+                pendingFinderExtractURL = source
+                if let index = archives.firstIndex(where: {
+                    ArchiveFormatCatalog.canonicalArchiveURL(for: $0).path == source.path
+                }) {
+                    pendingFinderExtractRest = Array(archives.suffix(from: archives.index(after: index)))
+                } else {
+                    pendingFinderExtractRest = []
+                }
                 openArchive(source, accessTokens: SecurityScopedAccess.captureTokens(for: [source]))
                 statusMessage = "Enter the password, then extraction continues."
                 return
             } catch ArchiveError.cancelled {
-                isLoading = false
+                guard generation == operationGeneration else { return }
                 statusMessage = "Extraction cancelled."
                 return
             } catch {
-                isLoading = false
+                guard generation == operationGeneration else { return }
                 errorMessage = error.localizedDescription
                 statusMessage = "Extraction failed."
                 return
@@ -500,6 +564,14 @@ final class ArchiveBrowserModel: ObservableObject {
             if archives.count > 1 {
                 statusMessage = "Opened \(archive.lastPathComponent). \(archives.count - 1) additional archive(s) were not opened."
             }
+            if !compressibles.isEmpty {
+                let compressTokens = tokens.filter { token in
+                    compressibles.contains(token.url)
+                }
+                pendingMixedDropURLs = compressibles
+                pendingMixedDropTokens = compressTokens
+            }
+            return
         }
 
         guard !compressibles.isEmpty else {
@@ -542,6 +614,7 @@ final class ArchiveBrowserModel: ObservableObject {
         let accessTokens = archiveAccessTokens
         let catalogEntries = listing?.entries ?? []
         let handle = ProcessRunner.Handle()
+        dragOutHandles[key]?.cancel()
         dragOutHandles[key] = handle
 
         dragOutTasks[key] = Task.detached(priority: .userInitiated) { [weak self] in
@@ -560,12 +633,12 @@ final class ArchiveBrowserModel: ObservableObject {
                 await MainActor.run {
                     self.dragOutPrepared[key] = extracted
                     self.dragOutTasks[key] = nil
-                    self.dragOutHandles[key] = nil
+                    self.clearDragHandle(handle, for: key)
                 }
             } catch {
                 await MainActor.run {
                     self.dragOutTasks[key] = nil
-                    self.dragOutHandles[key] = nil
+                    self.clearDragHandle(handle, for: key)
                 }
             }
         }
@@ -586,6 +659,7 @@ final class ArchiveBrowserModel: ObservableObject {
         let accessTokens = archiveAccessTokens
         let key = canonical.path
         let handle = ProcessRunner.Handle()
+        dragOutHandles[key]?.cancel()
         dragOutHandles[key] = handle
 
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -614,12 +688,12 @@ final class ArchiveBrowserModel: ObservableObject {
                     try FileManager.default.removeItem(at: url)
                 }
                 try FileManager.default.copyItem(at: extracted, to: url)
-                await MainActor.run { self.dragOutHandles[key] = nil }
+                await MainActor.run { self.clearDragHandle(handle, for: key) }
                 DispatchQueue.main.async {
                     completion(nil)
                 }
             } catch {
-                await MainActor.run { self.dragOutHandles[key] = nil }
+                await MainActor.run { self.clearDragHandle(handle, for: key) }
                 DispatchQueue.main.async {
                     completion(error)
                 }
@@ -840,7 +914,7 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func verifyOpenArchive() {
-        guard let archiveURL else { return }
+        guard let archiveURL, !isBusy else { return }
         Task {
             await verifyArchive(
                 at: archiveURL,
@@ -851,7 +925,7 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func quickLookSelected() {
-        guard listing != nil else { return }
+        guard listing != nil, !isBusy else { return }
         guard let entry = selectedFileEntries().first else {
             errorMessage = "Select a file to preview."
             return
@@ -860,7 +934,7 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     func previewEntry(_ entry: ArchiveEntry) {
-        guard listing != nil, !entry.isDirectory else { return }
+        guard listing != nil, !entry.isDirectory, !isBusy else { return }
         Task { await preview(entry) }
     }
 
@@ -870,8 +944,8 @@ final class ArchiveBrowserModel: ObservableObject {
         preservePaths: Bool,
         destinationTokens: [SecurityScopedAccess.Token]
     ) async {
-        let generation = operationGeneration
         guard let archiveURL else { return }
+        if refuseTruncatedFolderExtract(entries) { return }
         let sourceArchive = archiveURL
         let requestPassword = password.isEmpty ? nil : password
 
@@ -887,6 +961,7 @@ final class ArchiveBrowserModel: ObservableObject {
         defer { SecurityScopedAccess.releaseAll(&heldTokens) }
 
         let handle = beginOperationHandle()
+        let generation = operationGeneration
         isLoading = true
         defer {
             if generation == operationGeneration {
@@ -931,7 +1006,6 @@ final class ArchiveBrowserModel: ObservableObject {
         to destination: URL,
         destinationTokens: [SecurityScopedAccess.Token]
     ) async -> Bool {
-        let generation = operationGeneration
         guard let archiveURL else { return false }
         let sourceArchive = archiveURL
 
@@ -946,6 +1020,7 @@ final class ArchiveBrowserModel: ObservableObject {
         defer { SecurityScopedAccess.releaseAll(&heldTokens) }
 
         let handle = beginOperationHandle()
+        let generation = operationGeneration
         isLoading = true
         defer {
             if generation == operationGeneration {
@@ -1009,17 +1084,17 @@ final class ArchiveBrowserModel: ObservableObject {
         }
 
         let succeeded = await extractAll(to: folder, destinationTokens: destinationTokens)
-        guard generation == operationGeneration, archiveURL == sourceArchive, succeeded else { return }
+        guard archiveURL == sourceArchive, succeeded else { return }
         statusMessage = "Extracted archive to \(folder.path)."
         NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
     private func openFile(_ entry: ArchiveEntry) async {
-        let generation = operationGeneration
         guard let archiveURL else { return }
         let sourceArchive = archiveURL
         let canonical = canonicalEntry(for: entry)
         let handle = beginOperationHandle()
+        let generation = operationGeneration
         isLoading = true
         defer {
             if generation == operationGeneration {
@@ -1049,10 +1124,10 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     private func verifyArchive(at url: URL, password: String?, label: String) async {
-        let generation = operationGeneration
         let requestURL = archiveURL
         let accessTokens = archiveAccessTokens
         let handle = beginOperationHandle()
+        let generation = operationGeneration
         isLoading = true
         defer {
             if generation == operationGeneration {
@@ -1090,6 +1165,7 @@ final class ArchiveBrowserModel: ObservableObject {
     }
 
     private func preview(_ entry: ArchiveEntry) async {
+        previewGeneration += 1
         let generation = previewGeneration
         guard let archiveURL else { return }
         let sourceArchive = archiveURL
@@ -1098,6 +1174,7 @@ final class ArchiveBrowserModel: ObservableObject {
         let accessTokens = archiveAccessTokens
         let catalogEntries = listing?.entries ?? []
         let handle = beginOperationHandle()
+        let operationToken = operationGeneration
 
         isPreviewing = true
         statusMessage = "Preparing preview for \(canonical.displayName)…"
@@ -1105,6 +1182,9 @@ final class ArchiveBrowserModel: ObservableObject {
         defer {
             if generation == previewGeneration {
                 isPreviewing = false
+            }
+            if operationToken == operationGeneration {
+                isLoading = false
             }
         }
 
@@ -1123,7 +1203,7 @@ final class ArchiveBrowserModel: ObservableObject {
 
             guard generation == previewGeneration, archiveURL == sourceArchive else { return }
 
-            TempFileRegistry.setPreviewRoot(extracted.deletingLastPathComponent())
+            TempFileRegistry.setPreviewFile(extracted)
             if let panel = QLPreviewPanel.shared() {
                 panel.dataSource = QuickLookCoordinator.shared
                 panel.delegate = QuickLookCoordinator.shared
@@ -1197,12 +1277,22 @@ final class ArchiveBrowserModel: ObservableObject {
         }
     }
 
+    /// Folder extract expands children from the in-memory list. A truncated list
+    /// would silently omit the rest, so refuse folders and still allow files.
+    private func refuseTruncatedFolderExtract(_ entries: [ArchiveEntry]) -> Bool {
+        guard listing?.truncated == true, entries.contains(where: \.isDirectory) else { return false }
+        errorMessage = "This archive listing is truncated, so folders cannot be extracted safely. Extract individual files instead."
+        return true
+    }
+
     private func expandEntriesIncludingFolderChildren(_ entries: [ArchiveEntry]) -> [ArchiveEntry] {
         guard let listing else { return entries }
         var seen = Set<String>()
         var result: [ArchiveEntry] = []
         func include(_ entry: ArchiveEntry) {
-            let key = entry.normalizedPath.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            // Keep `Readme` and `readme` as two members. A folder and a file that share
+            // a name stay distinct because the folder key ends with `/`.
+            let key = entry.isDirectory ? entry.normalizedPath + "/" : entry.normalizedPath
             if seen.insert(key).inserted {
                 result.append(entry)
             }
@@ -1323,9 +1413,7 @@ final class ArchiveBrowserModel: ObservableObject {
             ) { [weak self] update in
                 Task { @MainActor in
                     guard let self, generation == self.compressGeneration else { return }
-                    self.compressProgress = min(max(update.fraction, 0), 1)
-                    self.compressProgressMessage = update.message
-                    self.compressProgressIndeterminate = update.indeterminate
+                    self.applyCompressionProgress(update)
                     self.statusMessage = update.message
                 }
             }
@@ -1412,6 +1500,33 @@ final class ArchiveBrowserModel: ObservableObject {
 
     private func releaseSecurityScopedAccess() {
         SecurityScopedAccess.releaseAll(&archiveAccessTokens)
+    }
+
+    /// Drop a drag-out handle only when it is still the one this task started.
+    /// A later drag replaces the handle; clearing it here would leave that extract running after the window closes.
+    private func clearDragHandle(_ handle: ProcessRunner.Handle, for key: String) {
+        if dragOutHandles[key] === handle {
+            dragOutHandles[key] = nil
+        }
+    }
+
+    private func applyCompressionProgress(_ update: CompressionProgressUpdate) {
+        let next = min(max(update.fraction, 0), 1)
+        // Stdout and stderr chunks hop to the main actor independently and can arrive out of order.
+        guard next >= compressProgress else { return }
+        compressProgress = next
+        compressProgressMessage = update.message
+        compressProgressIndeterminate = update.indeterminate
+    }
+
+    func noteAdditionalArchivesNotOpened(_ note: String) {
+        if listing != nil, !isLoading {
+            let name = archiveURL?.lastPathComponent ?? "archive"
+            statusMessage = "Opened \(name). \(note)"
+            pendingMultiOpenNote = nil
+        } else {
+            pendingMultiOpenNote = note
+        }
     }
 
     private func clearDragOutCache() {
@@ -1502,9 +1617,7 @@ final class ArchiveBrowserModel: ObservableObject {
                 onProgress: { [weak self] update in
                     Task { @MainActor in
                         guard let self, generation == self.compressGeneration else { return }
-                        self.compressProgress = update.fraction
-                        self.compressProgressMessage = update.message
-                        self.compressProgressIndeterminate = update.indeterminate
+                        self.applyCompressionProgress(update)
                     }
                 }
             )
@@ -1578,9 +1691,7 @@ final class ArchiveBrowserModel: ObservableObject {
                 onProgress: { [weak self] update in
                     Task { @MainActor in
                         guard let self, generation == self.compressGeneration else { return }
-                        self.compressProgress = update.fraction
-                        self.compressProgressMessage = update.message
-                        self.compressProgressIndeterminate = update.indeterminate
+                        self.applyCompressionProgress(update)
                     }
                 }
             )
@@ -1617,7 +1728,7 @@ final class ArchiveBrowserModel: ObservableObject {
         var collisions: [String] = []
         for url in urls {
             let name = url.lastPathComponent
-            if name == ".DS_Store" || name == "__MACOSX" || name.hasPrefix("._") { continue }
+            if CompressionSupport.shouldOmitFromArchive(name) { continue }
             let dest = currentPath.isEmpty ? name : currentPath + "/" + name
             let key = dest.lowercased(with: Locale(identifier: "en_US_POSIX"))
             let childPrefix = key + "/"
@@ -1632,6 +1743,11 @@ final class ArchiveBrowserModel: ObservableObject {
         pendingAddURLs = []
         pendingAddTokens = []
         addReplaceConfirmationMessage = ""
+    }
+
+    private func clearPendingMixedDrop() {
+        pendingMixedDropURLs = []
+        pendingMixedDropTokens = []
     }
 
     private func chooseDestination(

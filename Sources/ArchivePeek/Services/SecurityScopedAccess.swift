@@ -143,6 +143,12 @@ enum SecurityScopedAccess {
             guard exists else {
                 throw ArchiveError.entryNotFound(url.lastPathComponent)
             }
+            // Link text is enough. Check this before the directory branch: fileExists
+            // follows a symlink and would otherwise test the target (and can hang
+            // on a symlink to a directory on a dead mount).
+            if isSymlink {
+                continue
+            }
             // isReadableFile is flaky for directories on some volumes; accept search (x) bit too.
             if isDirectory.boolValue {
                 let readable = fileManager.isReadableFile(atPath: url.path)
@@ -150,9 +156,6 @@ enum SecurityScopedAccess {
                 if !readable {
                     throw ArchiveError.permissionDenied(url.lastPathComponent)
                 }
-            } else if isSymlink {
-                // Link text is enough for staging; do not require the target to be readable.
-                continue
             } else if !fileManager.isReadableFile(atPath: url.path) {
                 throw ArchiveError.permissionDenied(url.lastPathComponent)
             }

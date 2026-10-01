@@ -2,7 +2,7 @@
 
 A native macOS app for browsing archive contents without extracting everything first, and for creating new archives quickly.
 
-**Version 1.0.33** · macOS 13.0 or later
+**Version 1.0.38** · macOS 13.0 or later
 
 **Source & updates:** [github.com/Tim-the-tinkerer/ArchivePeek](https://github.com/Tim-the-tinkerer/ArchivePeek) — use **ArchivePeek → Check for Updates…** in the app.
 
@@ -20,8 +20,9 @@ A native macOS app for browsing archive contents without extracting everything f
 - **DMG app installer layout** — optional Applications folder shortcut when distributing `.app` bundles
 - **Solid 7z** option for stronger compression on large file sets
 - **Fast paths** using native macOS `zip`, `ditto`, and `bsdtar` where possible
-- **Clean archives** — excludes only macOS junk (`.DS_Store`, AppleDouble `._*`, `__MACOSX`); keeps `.gitignore`, `.git`, and other project files
-- **Settings** — default compression format, level, verify-after-create, comic book ZIP, Finder contextual menu (Extract Here / Create Archive), and optional “make default app” for archives
+- **Clean archives** — always excludes macOS junk (`.DS_Store`, AppleDouble `._*`, `__MACOSX`). Keeps `.gitignore`, `.git`, and other project files unless you list them under Exclusions
+- **Custom exclusions** — Settings → Exclusions, for names and patterns such as `node_modules`, `.git`, `*.log`, or `dist/.staging`
+- **Settings** — default compression format, level, verify-after-create, comic book ZIP, exclusions, Finder contextual menu (Extract Here / Create Archive), and optional “make default app” for archives
 
 ## Getting Started
 
@@ -66,6 +67,7 @@ Open **ArchivePeek → Settings…** (⌘,) to set defaults applied whenever you
 - Solid 7z archive (on/off)
 - Save ZIP as comic book (`.cbz`) (on/off, when default format is ZIP)
 - DMG app installer layout (on/off)
+- Exclusions — extra names and patterns left out of new archives and of files added to an open ZIP or 7z. The list starts empty
 
 Use **Set ArchivePeek as Default for Archives** to register ArchivePeek as the system default for ZIP, 7z, TAR, RAR, and similar archives. DMG and ISO are excluded (Disk Utility or Finder remain the usual handlers). macOS asks for a single confirmation.
 
@@ -78,14 +80,14 @@ Turn on **Show in Finder contextual menu** for one-click **Extract Here** and **
 - **RAR** creation needs WinRAR’s `rar` command (`brew install --cask rar` or [rarlab.com](https://www.rarlab.com/)). Opening and extracting RAR uses bundled 7-Zip and does not need `rar`.
 - **DMG** uses macOS `hdiutil` for standard compressed disk images (optional AES-256 encryption). When archiving a `.app`, enable **App installer layout** to add an Applications folder shortcut.
 - **ZIP and 7z** prepare files in a temp folder first (with progress), then compress — this avoids macOS permission prompts and incomplete reads on external volumes or large developer trees.
-- **Coding projects stay complete** — `.git`, `.gitignore`, `.build`, `node_modules`, hidden config, and symlinks are included. Application and help bundles (`.app`, `.help`) are copied as whole packages.
+- **Coding projects stay complete** — `.git`, `.gitignore`, `.build`, `node_modules`, hidden config, and symlinks are included unless you add them under Settings → Exclusions. Application and help bundles (`.app`, `.help`) are copied as whole packages.
 - Prefer archiving the **project folder** as a single item rather than multi-selecting files (multi-select only includes what you pick).
 - **ZIP or 7z with a password** uses 7-Zip and encrypts archive contents.
 - **7z solid archives** improve compression for many similar files but are slower to create and to extract individual files from.
 - **Verify before replacing** integrity-tests the new archive before replacing any file already at the destination (enabled by default).
 - Save new archives **outside** the folder being compressed (for example, on Desktop) to avoid nesting the archive inside itself.
 - Add all items in **one** Add Files step or drag to minimize folder permission prompts.
-- Only Mac metadata (`.DS_Store`, `._*`, `__MACOSX`) is excluded automatically — not project source files.
+- Only Mac metadata (`.DS_Store`, `._*`, `__MACOSX`) is excluded automatically — not project source files. Add your own names under Settings → Exclusions.
 - If compression fails, see `~/Library/Logs/ArchivePeek/compress.log` for details.
 
 ## Editing open archives
@@ -150,7 +152,7 @@ ArchivePeek/
 
 ## Third-party components
 
-ArchivePeek bundles [7-Zip](https://www.7-zip.org/) 26.02 (LGPL). See `ThirdParty/7-Zip-LICENSE.txt` or **Help → 7-Zip License** in the app.
+ArchivePeek bundles [7-Zip](https://www.7-zip.org/) 26.03 (LGPL). See `ThirdParty/7-Zip-LICENSE.txt` or **Help → 7-Zip License** in the app.
 
 System tools used when available:
 

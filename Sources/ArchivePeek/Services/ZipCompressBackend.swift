@@ -57,7 +57,8 @@ enum ZipCompressBackend {
         )
 
         let level = min(max(compressionLevel, 0), 9)
-        var arguments = ["-\(level)"]
+        // -y stores symlink text. Without it, zip copies the target or drops a dangling link.
+        var arguments = ["-y", "-\(level)"]
         if CompressionSupport.sourcesIncludeDirectory(workSources) {
             arguments.append("-r")
         }

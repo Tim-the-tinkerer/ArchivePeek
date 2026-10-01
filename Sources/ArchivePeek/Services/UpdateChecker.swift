@@ -143,17 +143,42 @@ enum UpdateChecker {
         for index in 0..<count {
             let a = index < left.count ? left[index] : "0"
             let b = index < right.count ? right[index] : "0"
-            if let ai = Int(a), let bi = Int(b) {
-                if ai != bi {
-                    return ai < bi ? .orderedAscending : .orderedDescending
-                }
-            } else {
-                let result = a.compare(b, options: .numeric)
-                if result != .orderedSame {
-                    return result
-                }
+            let result = compareVersionComponent(a, b)
+            if result != .orderedSame {
+                return result
             }
         }
         return .orderedSame
+    }
+
+    /// `1.0.10` > `1.0.9`. A hyphen suffix is a pre-release: `1.0.35-beta` < `1.0.35`.
+    private static func compareVersionComponent(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let (leftNumber, leftSuffix) = splitPreRelease(lhs)
+        let (rightNumber, rightSuffix) = splitPreRelease(rhs)
+        if leftNumber != rightNumber {
+            if let ai = Int(leftNumber), let bi = Int(rightNumber), ai != bi {
+                return ai < bi ? .orderedAscending : .orderedDescending
+            }
+            let result = leftNumber.compare(rightNumber, options: .numeric)
+            if result != .orderedSame { return result }
+        }
+        switch (leftSuffix, rightSuffix) {
+        case (nil, nil):
+            return .orderedSame
+        case (nil, _?):
+            return .orderedDescending
+        case (_?, nil):
+            return .orderedAscending
+        case let (left?, right?):
+            return left.compare(right, options: .numeric)
+        }
+    }
+
+    private static func splitPreRelease(_ part: String) -> (String, String?) {
+        guard let dash = part.firstIndex(of: "-") else { return (part, nil) }
+        let number = String(part[..<dash])
+        let suffix = String(part[part.index(after: dash)...])
+        guard !number.isEmpty, !suffix.isEmpty else { return (part, nil) }
+        return (number, suffix)
     }
 }

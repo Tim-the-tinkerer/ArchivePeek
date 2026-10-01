@@ -74,7 +74,7 @@ enum ToolLocator {
     }
 
     static var bundledSevenZipVersion: String? {
-        usesBundledSevenZip ? "26.02" : nil
+        usesBundledSevenZip ? "26.03" : nil
     }
 
     static var statusSummary: String {

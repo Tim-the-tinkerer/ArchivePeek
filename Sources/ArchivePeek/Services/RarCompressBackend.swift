@@ -23,6 +23,8 @@ enum RarCompressBackend {
         ))
         if handle?.wasCancelled == true { throw ArchiveError.cancelled }
 
+        try CompressionSupport.removeStaleNestedArchives(archive: archive, sources: sources)
+
         let staged = try CompressionSupport.stageForSevenZip(
             sources,
             onProgress: { update in onProgress?(update) },

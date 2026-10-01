@@ -23,7 +23,14 @@ enum DefaultAppRegistration {
             "public.tar-archive",
         ]
         for ext in ArchiveFormatCatalog.allExtensions where !excludedDefaultExtensions.contains(ext) {
-            if let type = UTType(filenameExtension: ext) {
+            guard let type = UTType(filenameExtension: ext) else { continue }
+            // .odt / .epub and similar resolve to document or book types. Claiming those
+            // would take them from their editors. Only claim archive types and our own UTIs.
+            if type.identifier == archiveTypeIdentifier || type.identifier == "com.archivepeek.cbz" {
+                identifiers.insert(type.identifier)
+                continue
+            }
+            if type.conforms(to: .archive) || type.conforms(to: .zip) {
                 identifiers.insert(type.identifier)
             }
         }
@@ -31,7 +38,9 @@ enum DefaultAppRegistration {
     }
 
     static func isDefaultForArchives() -> Bool {
-        isDefaultApplication(for: .zip) || isDefaultApplication(for: exportedArchiveType)
+        // The private UTI is one this app exports, so Launch Services names ArchivePeek for it
+        // even when ZIP and the other shared types still open elsewhere.
+        isDefaultApplication(for: .zip)
     }
 
     static func defaultApplicationSummary() -> String {
@@ -56,19 +65,19 @@ enum DefaultAppRegistration {
 
         registerBundleWithLaunchServices()
 
-        var anySucceeded = false
+        var sharedSucceeded = false
         for identifier in claimedDefaultTypeIdentifiers() {
             let status = LSSetDefaultRoleHandlerForContentType(
                 identifier as CFString,
                 LSRolesMask.all,
                 bundleID as CFString
             )
-            if status == noErr {
-                anySucceeded = true
+            if status == noErr && !identifier.hasPrefix("com.archivepeek.") {
+                sharedSucceeded = true
             }
         }
 
-        return RegistrationResult(succeeded: anySucceeded)
+        return RegistrationResult(succeeded: sharedSucceeded)
     }
 
     private static func isDefaultApplication(for type: UTType?) -> Bool {

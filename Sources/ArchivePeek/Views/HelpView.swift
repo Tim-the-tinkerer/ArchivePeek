@@ -80,7 +80,8 @@ struct HelpView: View {
                         helpBullet("After creation, ArchivePeek reveals the new file in Finder but does not open it automatically.")
                         helpBullet("Enable **Verify before replacing** to integrity-test the new archive before replacing any file already at the destination.")
                         helpBullet("Use **Verify Integrity** in the toolbar to test the currently open archive.")
-                        helpBullet("Only macOS junk is stripped: `.DS_Store`, AppleDouble (`._*`), and `__MACOSX`. Project files such as `.gitignore` are kept.")
+                        helpBullet("Only macOS junk is stripped by default: `.DS_Store`, AppleDouble (`._*`), and `__MACOSX`. Project files such as `.gitignore` are kept.")
+                        helpBullet("**Settings → Exclusions** adds your own names and patterns (`node_modules`, `.git`, `*.log`, `dist/.staging`). Those are left out when you create an archive or add files. The list starts empty.")
                         helpBullet("If compression fails, open `~/Library/Logs/ArchivePeek/compress.log` for diagnostic details.")
                     }
 
@@ -94,6 +95,7 @@ struct HelpView: View {
                     helpSection("Settings", icon: "gearshape") {
                         helpBullet("Open **ArchivePeek → Settings…** (⌘,) to set default compression options.")
                         helpBullet("Defaults include format, compression level, verify before replace, solid 7z, comic book ZIP (.cbz), and DMG app installer layout.")
+                        helpBullet("**Exclusions** is a list of names and patterns left out of new archives and of files you add. `node_modules` matches that name anywhere. `src/*.swift` matches that path. `*` and `?` are wildcards. The list starts empty.")
                         helpBullet("Defaults are applied each time you open the Compress sheet.")
                         helpBullet("Use **Set ArchivePeek as Default for Archives** to make ArchivePeek the default app for ZIP, 7z, TAR, RAR, and similar archives. DMG and ISO are excluded.")
                         helpBullet("Turn on **Show in Finder contextual menu**, then quit and reopen ArchivePeek. Right-click in Finder and look under **Services** or **Quick Actions** for **ArchivePeek: Extract Here** and **ArchivePeek: Create Archive** (Quick Actions may say **Extract Here** / **Create Archive**).")
@@ -125,7 +127,7 @@ struct HelpView: View {
                     }
 
                     helpSection("Tools", icon: "wrench.and.screwdriver") {
-                        helpText("ArchivePeek bundles 7-Zip 26.02 and uses macOS tools where they are faster: zip, ditto, and bsdtar.")
+                        helpText("ArchivePeek bundles 7-Zip 26.03 and uses macOS tools where they are faster: zip, ditto, and bsdtar.")
                         helpText(ToolLocator.statusSummary)
                     }
                 }

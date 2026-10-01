@@ -39,7 +39,7 @@ if [[ -x "$APP" ]]; then pass "ArchivePeek binary exists"; else fail "ArchivePee
 if [[ -x "$BUNDLED_7ZZ" ]]; then pass "Bundled 7zz exists"; else fail "Bundled 7zz missing"; fi
 if "$TOOLS" >/dev/null 2>&1; then pass "Materialized 7zz runs"; else fail "Materialized 7zz smoke test"; fi
 VER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ArchivePeek.app/Contents/Info.plist)
-[[ "$VER" == "1.0.33" ]] && pass "Version is 1.0.33" || fail "Version expected 1.0.33, got $VER"
+[[ "$VER" == "1.0.38" ]] && pass "Version is 1.0.38" || fail "Version expected 1.0.38, got $VER"
 
 echo
 echo "2. Browse / list archives"
@@ -75,8 +75,9 @@ else
   fail "TAR listing with spaces"
 fi
 
-"$TOOLS" a -t7z -v512 "$TMP/split.7z" "$TMP/Fun Stuff/track one.mp3" "$TMP/Fun Stuff/track two.mp3" >/dev/null
-# Same as Compress → Split into volumes (7-Zip -v).
+# 26.03 packs this 20-byte fixture into 202 bytes, so the volume must be
+# smaller than that to force a second part. Same switch as Compress → Split into volumes.
+"$TOOLS" a -t7z -v128 "$TMP/split.7z" "$TMP/Fun Stuff/track one.mp3" "$TMP/Fun Stuff/track two.mp3" >/dev/null
 if [[ -f "$TMP/split.7z.001" ]] && "$TOOLS" l -slt -ba -bd -bb0 "$TMP/split.7z.001" 2>/dev/null | grep -q "track one.mp3"; then
   pass "Split 7z lists from first volume (.001)"
 else
@@ -281,6 +282,251 @@ else
   else
     fail "ProcessRunner uses live readabilityHandler"
   fi
+fi
+
+echo
+echo "4c. Custom exclusions"
+cat > "$TMP/main.swift" << 'SWIFT'
+import Foundation
+
+func check(_ condition: Bool, _ label: String) {
+    if !condition {
+        fputs("FAIL \(label)\n", stderr)
+        exit(1)
+    }
+}
+
+func excludes(_ pattern: String, _ path: String) -> Bool {
+    ArchiveExclusions.excludes(path, patterns: [pattern])
+}
+
+func rejected(_ raw: String) -> Bool {
+    if case .rejected = ArchiveExclusions.parse(raw) { return true }
+    return false
+}
+
+check(excludes("node_modules", "node_modules"), "name")
+check(excludes("node_modules", "proj/node_modules"), "nested dir")
+check(excludes("node_modules", "proj/node_modules/pkg/index.js"), "inside excluded dir")
+check(!excludes("node_modules", "node_modules_backup"), "prefix is not a match")
+check(!excludes("node_modules", ".gitignore"), "other name kept")
+check(excludes("*.log", "a.log"), "glob file")
+check(excludes("*.log", "dir/a.LOG"), "glob nested case")
+check(!excludes("*.log", "a.txt"), "glob miss")
+check(excludes("src/*.swift", "src/main.swift"), "path glob")
+check(excludes("src/*.swift", "lib/src/main.swift"), "path glob anywhere")
+check(!excludes("src/*.swift", "src/util/main.swift"), "star does not cross slash")
+check(excludes("logs/**", "logs"), "globstar dir")
+check(excludes("logs/**", "logs/a/b.txt"), "globstar contents")
+check(excludes(".git", "Proj/.GIT/config"), "dot dir case")
+check(excludes("dist/.staging", "app/dist/.staging/file"), "relative path")
+check(excludes("café*", "Café.txt"), "unicode star case")
+check(excludes("Café*", "café.TXT"), "unicode star case swapped")
+check(excludes("caf?", "café"), "question mark is one character")
+check(!excludes("caf?", "caféx"), "question mark is only one character")
+check(!excludes("caf?", "caf"), "question mark is required")
+let decomposed = "café".decomposedStringWithCanonicalMapping + ".txt"
+check(excludes("café*", decomposed), "unicode normalization")
+check(rejected("*"), "reject star")
+check(rejected("**"), "reject globstar only")
+check(rejected("**/*"), "reject everything")
+check(rejected("../secret"), "reject dotdot")
+check(rejected("/tmp"), "reject absolute")
+check(rejected(""), "reject empty")
+check(rejected("-secret"), "reject leading dash")
+if case .accepted(let display) = ArchiveExclusions.parse("node_modules/") {
+    check(display == "node_modules", "strip trailing slash")
+} else {
+    check(false, "strip trailing slash")
+}
+if case .accepted(let display) = ArchiveExclusions.parse("./.git") {
+    check(display == ".git", "strip dot slash")
+} else {
+    check(false, "strip dot slash")
+}
+print("ALL OK")
+SWIFT
+if swiftc -o "$TMP/excl-test" Sources/ArchivePeek/Services/ArchiveExclusions.swift "$TMP/main.swift" \
+  && "$TMP/excl-test" | grep -q '^ALL OK$'; then
+  pass "Exclusion patterns match names, globs, and paths"
+else
+  fail "Exclusion patterns match names, globs, and paths"
+fi
+if grep -q 'customExclusionPatterns' Sources/ArchivePeek/Models/AppSettings.swift \
+  && grep -q 'pruneStagedTree' Sources/ArchivePeek/Services/CompressionSupport.swift \
+  && grep -q 'pruneStagedTree' Sources/ArchivePeek/Services/DmgCompressBackend.swift \
+  && grep -q 'Text("Exclusions")' Sources/ArchivePeek/Views/SettingsView.swift; then
+  pass "Custom exclusions are wired into Settings and staging"
+else
+  fail "Custom exclusions are wired into Settings and staging"
+fi
+
+echo
+echo "4d. Extract containment and ZIP directory"
+mkdir -p "$TMP/contain"
+cat > "$TMP/main.swift" <<'SWIFT'
+import Foundation
+let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+let fm = FileManager.default
+func fail(_ message: String) -> Never {
+    fputs("FAIL \(message)\n", stderr)
+    exit(1)
+}
+let inside = root.appendingPathComponent("inside.txt")
+try Data("ok".utf8).write(to: inside)
+let safe = root.appendingPathComponent("safe-link")
+try fm.createSymbolicLink(atPath: safe.path, withDestinationPath: "inside.txt")
+let outside = root.appendingPathComponent("outside-link")
+try fm.createSymbolicLink(atPath: outside.path, withDestinationPath: "/etc/passwd")
+let danglingOut = root.appendingPathComponent("dangling-out")
+try fm.createSymbolicLink(atPath: danglingOut.path, withDestinationPath: "/tmp/archivepeek-no-such-target")
+let appDir = root.appendingPathComponent("Demo.app/Contents", isDirectory: true)
+try fm.createDirectory(at: appDir, withIntermediateDirectories: true)
+let pkgLink = appDir.appendingPathComponent("escape")
+try fm.createSymbolicLink(atPath: pkgLink.path, withDestinationPath: "../../../../../../../../etc/passwd")
+let sub = root.appendingPathComponent("sub", isDirectory: true)
+try fm.createDirectory(at: sub, withIntermediateDirectories: true)
+let rel = sub.appendingPathComponent("rel-escape")
+try fm.createSymbolicLink(atPath: rel.path, withDestinationPath: "../../outside.txt")
+do {
+    try PathSafety.enforceExtractContainment(in: root)
+    fail("containment allowed an outside link")
+} catch {}
+func isLink(_ url: URL) -> Bool {
+    (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+}
+if isLink(outside) || isLink(danglingOut) || isLink(pkgLink) || isLink(rel) {
+    fail("escaped links were left in place")
+}
+if !isLink(safe) || !fm.fileExists(atPath: inside.path) {
+    fail("in-tree file or link was removed")
+}
+let danglingIn = root.appendingPathComponent("dangling-in")
+try fm.createSymbolicLink(atPath: danglingIn.path, withDestinationPath: "missing-target")
+try PathSafety.enforceExtractContainment(in: root)
+if !isLink(danglingIn) || !isLink(safe) {
+    fail("in-tree dangling link was removed")
+}
+let extracted = try PathSafety.containedExtractedFile("safe-link", in: root)
+if extracted.lastPathComponent != "safe-link" { fail("contained extract") }
+do {
+    try PathSafety.validateArchiveEntryPath("dir/file*.txt")
+    fail("wildcard path was accepted")
+} catch {}
+if PathSafety.normalizeListedPath("./sub/f.txt") != "sub/f.txt" { fail("normalize listed path") }
+if PathSafety.normalizeListedPath(".") != nil || PathSafety.normalizeListedPath("./") != nil {
+    fail("archive root was kept as a member")
+}
+do {
+    try PathSafety.validateArchiveEntryPath("./sub/f.txt")
+    fail("dot component was accepted")
+} catch {}
+print("ALL OK")
+SWIFT
+if swiftc -o "$TMP/contain-test" \
+    Sources/ArchivePeek/Services/ArchiveError.swift \
+    Sources/ArchivePeek/Models/ArchiveEntry.swift \
+    Sources/ArchivePeek/Services/PathSafety.swift \
+    "$TMP/main.swift" \
+  && "$TMP/contain-test" "$TMP/contain" | grep -q '^ALL OK$'; then
+  pass "Symlink extract stays inside the destination"
+else
+  fail "Symlink extract stays inside the destination"
+fi
+
+echo "hi" > "$TMP/eocd-a.txt"
+cat > "$TMP/main.swift" <<'SWIFT'
+import Foundation
+let url = URL(fileURLWithPath: CommandLine.arguments[1])
+let entries = try ZipArchiveLister.entries(at: url, maxEntries: 100)
+let names = entries.map(\.path)
+if names.contains(where: { $0.hasSuffix("eocd-a.txt") }) {
+    print("ALL OK")
+} else {
+    fputs("FAIL names \(names)\n", stderr)
+    exit(1)
+}
+SWIFT
+cat > "$TMP/eocd-comment.py" <<'PY'
+import pathlib, struct, sys
+src = pathlib.Path(sys.argv[1]).read_bytes()
+sig = b"PK\x05\x06"
+idx = src.rfind(sig)
+if idx < 0 or idx + 22 > len(src):
+    raise SystemExit("no eocd")
+comment = b"PK\x06\x07" + b"PK\x05\x06" + (b"\x00" * 18) + b"TRAILER"
+eocd = bytearray(src[idx:idx + 22])
+struct.pack_into("<H", eocd, 20, len(comment))
+pathlib.Path(sys.argv[2]).write_bytes(src[:idx] + bytes(eocd) + comment)
+PY
+if /usr/bin/zip -q -X "$TMP/eocd-plain.zip" "$TMP/eocd-a.txt" \
+  && python3 "$TMP/eocd-comment.py" "$TMP/eocd-plain.zip" "$TMP/eocd-comment.zip" \
+  && swiftc -o "$TMP/zip-eocd-test" \
+    Sources/ArchivePeek/Services/ArchiveError.swift \
+    Sources/ArchivePeek/Models/ArchiveEntry.swift \
+    Sources/ArchivePeek/Services/ZipArchiveLister.swift \
+    "$TMP/main.swift" \
+  && "$TMP/zip-eocd-test" "$TMP/eocd-comment.zip" | grep -q '^ALL OK$'; then
+  pass "ZIP comment cannot impersonate the directory"
+else
+  fail "ZIP comment cannot impersonate the directory"
+fi
+
+echo
+echo "4e. Split volume identity"
+mkdir -p "$TMP/splits"
+printf 'x' > "$TMP/splits/Backup.7z"
+printf 'x' > "$TMP/splits/Backup.7z.001"
+printf 'x' > "$TMP/splits/Backup.7z.002"
+printf 'x' > "$TMP/splits/Notes.rar"
+printf 'x' > "$TMP/splits/Notes.part1.rar"
+printf 'x' > "$TMP/splits/Notes.part2.rar"
+printf 'x' > "$TMP/splits/Old.rar"
+printf 'x' > "$TMP/splits/Old.r00"
+printf 'x' > "$TMP/splits/Span.zip"
+printf 'x' > "$TMP/splits/Span.z01"
+cat > "$TMP/main.swift" << 'SWIFT'
+import Foundation
+let dir = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+func fail(_ message: String) -> Never {
+    fputs("FAIL \(message)\n", stderr)
+    exit(1)
+}
+func file(_ name: String) -> URL { dir.appendingPathComponent(name) }
+if SplitArchive.set(for: file("Backup.7z")) != nil {
+    fail("plain 7z opened the .001 set")
+}
+guard let seven = SplitArchive.set(for: file("Backup.7z.001")),
+      seven.isMultiVolume,
+      seven.volumes.count == 2,
+      seven.firstVolume.lastPathComponent == "Backup.7z.001" else {
+    fail("7z.001 set")
+}
+if SplitArchive.set(for: file("Notes.rar")) != nil {
+    fail("plain rar opened the part set")
+}
+guard let parts = SplitArchive.set(for: file("Notes.part2.rar")),
+      parts.volumes.count == 2,
+      parts.firstVolume.lastPathComponent == "Notes.part1.rar" else {
+    fail("part set")
+}
+guard let old = SplitArchive.set(for: file("Old.rar")),
+      old.isMultiVolume,
+      old.volumes.contains(where: { $0.lastPathComponent == "Old.r00" }) else {
+    fail("rar plus r00")
+}
+guard let span = SplitArchive.set(for: file("Span.zip")),
+      span.isMultiVolume,
+      span.volumes.contains(where: { $0.lastPathComponent == "Span.z01" }) else {
+    fail("zip plus z01")
+}
+print("ALL OK")
+SWIFT
+if swiftc -o "$TMP/split-id" Sources/ArchivePeek/Services/SplitArchive.swift "$TMP/main.swift" \
+  && "$TMP/split-id" "$TMP/splits" | grep -q '^ALL OK$'; then
+  pass "A plain archive is not treated as numbered volumes"
+else
+  fail "A plain archive is not treated as numbered volumes"
 fi
 
 echo

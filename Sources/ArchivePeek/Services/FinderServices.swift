@@ -17,6 +17,8 @@ final class FinderServices: NSObject {
     private var pendingCreate: (urls: [URL], tokens: [SecurityScopedAccess.Token])?
     private var lastActionKey: String?
     private var lastActionAt: Date?
+    private static let processStartedAt = Date()
+    private static let pasteboardFlushQueue = DispatchQueue(label: "com.archivepeek.pbs-flush")
     private var deliverGeneration = 0
 
     var hasPendingWork: Bool {
@@ -76,7 +78,10 @@ final class FinderServices: NSObject {
             return false
         }
         let key = "\(isCreate ? "c" : "e")|" + files.map(\.path).sorted().joined(separator: "|")
-        if lastActionKey == key, let last = lastActionAt, Date().timeIntervalSince(last) < 2 {
+        // Cold start delivers the same archivepeek:// URL twice, and the pasteboard flush used to
+        // push the second copy past a 2 second window. Keep a longer quiet period just after launch.
+        let quiet: TimeInterval = Date().timeIntervalSince(Self.processStartedAt) < 20 ? 12 : 2
+        if lastActionKey == key, let last = lastActionAt, Date().timeIntervalSince(last) < quiet {
             Self.log("dedup \(key)")
             return true
         }
@@ -240,20 +245,22 @@ final class FinderServices: NSObject {
     }
 
     private static func flushPasteboardServer() {
+        // pbs -flush waits on another process. Doing that on the main thread beachballs launch
+        // and lets a second Finder action start before the first one is deduped.
+        pasteboardFlushQueue.async {
+            runPasteboardServer("-flush")
+            runPasteboardServer("-flush_userdefs")
+        }
+    }
+
+    private static func runPasteboardServer(_ argument: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/System/Library/CoreServices/pbs")
-        process.arguments = ["-flush"]
+        process.arguments = [argument]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
         process.waitUntilExit()
-        let flushDefs = Process()
-        flushDefs.executableURL = URL(fileURLWithPath: "/System/Library/CoreServices/pbs")
-        flushDefs.arguments = ["-flush_userdefs"]
-        flushDefs.standardOutput = FileHandle.nullDevice
-        flushDefs.standardError = FileHandle.nullDevice
-        try? flushDefs.run()
-        flushDefs.waitUntilExit()
     }
 
     private static var servicesDirectory: URL {

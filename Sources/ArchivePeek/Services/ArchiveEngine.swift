@@ -213,7 +213,7 @@ enum ArchiveEngine {
         var result: [ArchiveEntry] = []
 
         func include(_ entry: ArchiveEntry) {
-            let key = entry.normalizedPath.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            let key = entry.isDirectory ? entry.normalizedPath + "/" : entry.normalizedPath
             if seen.insert(key).inserted {
                 result.append(entry)
             }
@@ -297,10 +297,13 @@ enum ArchiveEngine {
 
         let splitting = volumeArgument != nil
         let noPassword = password == nil || password?.isEmpty == true
+        let singleSourceIsSymlink = workSources.count == 1
+            && ((try? workSources[0].resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true)
         let useDitto = format == .zip
             && noPassword
             && !splitting
             && workSources.count == 1
+            && !singleSourceIsSymlink
             && ToolLocator.dittoPath != nil
         let useNativeZip = format == .zip
             && noPassword
@@ -338,6 +341,7 @@ enum ArchiveEngine {
             try DittoCompressBackend.compress(
                 sources: workSources,
                 to: archive,
+                compressionLevel: compressionLevel,
                 handle: handle,
                 beforeCommit: beforeCommit,
                 onProgress: onProgress
@@ -593,9 +597,48 @@ enum ArchiveEngine {
         let archive = try resolvedArchiveFile(archive)
 
         let backend = ArchiveFormatCatalog.preferredBackend(for: archive)
-        switch backend {
-        case .zipNative:
-            if ToolLocator.isSevenZipAvailable {
+        var toolError: Error?
+        do {
+            switch backend {
+            case .zipNative:
+                if ToolLocator.isSevenZipAvailable {
+                    try SevenZipBackend.extract(
+                        entries: entries,
+                        from: archive,
+                        to: destination,
+                        preservePaths: preservePaths,
+                        password: password,
+                        handle: handle
+                    )
+                } else {
+                    try extractZipEntries(
+                        entries,
+                        from: archive,
+                        to: destination,
+                        preservePaths: preservePaths,
+                        handle: handle
+                    )
+                }
+            case .tar:
+                if ToolLocator.bsdtarPath != nil {
+                    try TarBackend.extract(
+                        entries: entries,
+                        from: archive,
+                        to: destination,
+                        preservePaths: preservePaths,
+                        handle: handle
+                    )
+                } else {
+                    try SevenZipBackend.extract(
+                        entries: entries,
+                        from: archive,
+                        to: destination,
+                        preservePaths: preservePaths,
+                        password: password,
+                        handle: handle
+                    )
+                }
+            case .sevenZip:
                 try SevenZipBackend.extract(
                     entries: entries,
                     from: archive,
@@ -604,45 +647,11 @@ enum ArchiveEngine {
                     password: password,
                     handle: handle
                 )
-            } else {
-                try extractZipEntries(
-                    entries,
-                    from: archive,
-                    to: destination,
-                    preservePaths: preservePaths,
-                    handle: handle
-                )
             }
-        case .tar:
-            if ToolLocator.bsdtarPath != nil {
-                try TarBackend.extract(
-                    entries: entries,
-                    from: archive,
-                    to: destination,
-                    preservePaths: preservePaths,
-                    handle: handle
-                )
-            } else {
-                try SevenZipBackend.extract(
-                    entries: entries,
-                    from: archive,
-                    to: destination,
-                    preservePaths: preservePaths,
-                    password: password,
-                    handle: handle
-                )
-            }
-        case .sevenZip:
-            try SevenZipBackend.extract(
-                entries: entries,
-                from: archive,
-                to: destination,
-                preservePaths: preservePaths,
-                password: password,
-                handle: handle
-            )
+        } catch {
+            toolError = error
         }
-        try PathSafety.enforceExtractContainment(in: destination)
+        try finishExtract(toolError: toolError, destination: destination)
     }
 
     private static func extractAllSynchronously(
@@ -666,38 +675,56 @@ enum ArchiveEngine {
 
         let source = listing.archiveURL
         let backend = ArchiveFormatCatalog.preferredBackend(for: source)
-        switch backend {
-        case .zipNative:
-            if ToolLocator.isSevenZipAvailable {
+        var toolError: Error?
+        do {
+            switch backend {
+            case .zipNative:
+                if ToolLocator.isSevenZipAvailable {
+                    try SevenZipBackend.extractAll(
+                        from: source,
+                        to: destination,
+                        password: password,
+                        handle: handle
+                    )
+                } else {
+                    try extractZipAll(from: source, to: destination, handle: handle)
+                }
+            case .sevenZip:
                 try SevenZipBackend.extractAll(
                     from: source,
                     to: destination,
                     password: password,
                     handle: handle
                 )
-            } else {
-                try extractZipAll(from: source, to: destination, handle: handle)
+            case .tar:
+                if ToolLocator.bsdtarPath != nil {
+                    try TarBackend.extractAll(from: source, to: destination, handle: handle)
+                } else {
+                    try SevenZipBackend.extractAll(
+                        from: source,
+                        to: destination,
+                        password: password,
+                        handle: handle
+                    )
+                }
             }
-        case .sevenZip:
-            try SevenZipBackend.extractAll(
-                from: source,
-                to: destination,
-                password: password,
-                handle: handle
-            )
-        case .tar:
-            if ToolLocator.bsdtarPath != nil {
-                try TarBackend.extractAll(from: source, to: destination, handle: handle)
-            } else {
-                try SevenZipBackend.extractAll(
-                    from: source,
-                    to: destination,
-                    password: password,
-                    handle: handle
-                )
-            }
+        } catch {
+            toolError = error
         }
-        try PathSafety.enforceExtractContainment(in: destination)
+        try finishExtract(toolError: toolError, destination: destination)
+    }
+
+    /// Remove links that point outside the destination even when the tool failed partway through.
+    /// The tool's error is the one the user sees. Containment still runs first so those links are gone.
+    private static func finishExtract(toolError: Error?, destination: URL) throws {
+        var containmentError: Error?
+        do {
+            try PathSafety.enforceExtractContainment(in: destination)
+        } catch {
+            containmentError = error
+        }
+        if let toolError { throw toolError }
+        if let containmentError { throw containmentError }
     }
 
     /// Fallback Extract All for ZIP when 7-Zip is unavailable (paths already validated).
@@ -785,11 +812,7 @@ enum ArchiveEngine {
         try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
         TempFileRegistry.registerExtractRoot(tempRoot)
         try extractZipEntries([entry], from: archive, to: tempRoot, preservePaths: true, handle: handle)
-        let extracted = try PathSafety.resolvedURL(forEntryPath: entry.normalizedPath, in: tempRoot)
-        guard FileManager.default.fileExists(atPath: extracted.path) else {
-            throw ArchiveError.entryNotFound(entry.path)
-        }
-        return extracted
+        return try PathSafety.containedExtractedFile(entry.normalizedPath, in: tempRoot)
     }
 
     private static func extractFolderToTemp(
@@ -889,6 +912,7 @@ enum ArchiveEngine {
         isDirectory = false
         if FileManager.default.fileExists(atPath: folderURL.path, isDirectory: &isDirectory),
            isDirectory.boolValue {
+            try PathSafety.enforceExtractContainment(in: tempRoot)
             return folderURL
         }
 
@@ -898,10 +922,12 @@ enum ArchiveEngine {
             guard FileManager.default.fileExists(atPath: folderURL.path) else {
                 throw ArchiveError.entryNotFound(entry.path)
             }
+            try PathSafety.enforceExtractContainment(in: tempRoot)
             return folderURL
         }
 
         if let toolError {
+            try? PathSafety.enforceExtractContainment(in: tempRoot)
             throw toolError
         }
         throw ArchiveError.entryNotFound(entry.path)
@@ -960,9 +986,14 @@ enum ArchiveEngine {
 
         for entry in entries where !entry.isDirectory {
             if handle?.wasCancelled == true { throw ArchiveError.cancelled }
-            var arguments = ["-o", archive.path, entry.path, "-d", destination.path]
+            if entry.path.hasPrefix("-") || entry.normalizedPath.hasPrefix("-") {
+                throw ArchiveError.commandFailed(
+                    "“\(entry.displayName)” starts with a dash. Install 7-Zip to extract it safely."
+                )
+            }
+            var arguments = ["-o", "-d", destination.path, archive.path, entry.path]
             if !preservePaths {
-                arguments = ["-jo", archive.path, entry.path, "-d", destination.path]
+                arguments = ["-jo", "-d", destination.path, archive.path, entry.path]
             }
             let result = try ProcessRunner.run(executable: unzip, arguments: arguments, handle: handle)
             if result.wasCancelled { throw ArchiveError.cancelled }
@@ -971,6 +1002,7 @@ enum ArchiveEngine {
                 throw ArchiveError.commandFailed(message.isEmpty ? "unzip failed" : message)
             }
         }
+        try PathSafety.createExtractedDirectories(entries, in: destination, preservePaths: preservePaths)
     }
 
     private static func fileSize(_ url: URL) -> Int64 {
