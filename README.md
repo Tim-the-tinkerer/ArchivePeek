@@ -2,7 +2,7 @@
 
 A native macOS app for browsing archive contents without extracting everything first, and for creating new archives quickly.
 
-**Version 1.0.39** · macOS 13.0 or later
+**Version 1.0.41** · macOS 13.0 or later
 
 **Source & updates:** [github.com/Tim-the-tinkerer/ArchivePeek](https://github.com/Tim-the-tinkerer/ArchivePeek) — use **ArchivePeek → Check for Updates…** in the app.
 

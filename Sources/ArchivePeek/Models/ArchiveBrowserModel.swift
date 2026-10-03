@@ -25,6 +25,8 @@ package final class ArchiveBrowserModel: ObservableObject {
     @Published var compressDmgAppInstaller = false
     /// When format is ZIP, write a comic-book ZIP (`.cbz`) instead of `.zip`.
     @Published var compressSaveAsComicBookZip = false
+    /// ZIP member method. Ignored for every other format, and ignored at Store.
+    @Published var compressZipMethod: ZipCompressionMethod = .deflate
     @Published var compressSplitVolume: SplitVolumePreset = .off
     @Published var verifyAfterCompress = true
     @Published package var isCompressing = false
@@ -1399,6 +1401,7 @@ package final class ArchiveBrowserModel: ObservableObject {
                 to: archiveDestination,
                 format: compressFormat,
                 compressionLevel: compressionLevel,
+                zipMethod: compressFormat.isZip ? compressZipMethod : .deflate,
                 password: compressPassword.isEmpty ? nil : compressPassword,
                 solidArchive: compressSolidArchive,
                 volumeArgument: compressFormat.supportsSplitVolumes && !saveAsComicBookZip
@@ -1611,6 +1614,9 @@ package final class ArchiveBrowserModel: ObservableObject {
                 archive: sourceArchive,
                 archiveFolder: folder,
                 compressionLevel: compressionLevel,
+                zipMethod: ArchiveFormatCatalog.mutationFormat(for: sourceArchive) == .zip
+                    ? compressZipMethod
+                    : .deflate,
                 password: requestPassword,
                 accessTokens: heldTokens,
                 handle: handle,

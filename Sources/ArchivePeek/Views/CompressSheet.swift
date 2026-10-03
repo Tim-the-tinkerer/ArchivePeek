@@ -48,6 +48,32 @@ struct CompressSheet: View {
                 }
             }
 
+            if browser.compressFormat.isZip {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("ZIP method")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Picker("ZIP method", selection: $browser.compressZipMethod) {
+                        ForEach(ZipCompressionMethod.allCases) { method in
+                            Text(method.label).tag(method)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                    if browser.compressZipMethod == .deflate64 {
+                        Text(deflate64Note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if browser.compressZipMethod == .deflate64, !ToolLocator.isSevenZipAvailable {
+                        Text("Deflate64 needs 7-Zip.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+
             if browser.compressFormat.supportsPassword {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Password (optional)")
@@ -159,7 +185,11 @@ struct CompressSheet: View {
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(browser.compressSources.isEmpty
-                    || (browser.compressFormat.isRar && !ToolLocator.isRarAvailable))
+                    || (browser.compressFormat.isRar && !ToolLocator.isRarAvailable)
+                    || (browser.compressFormat.isZip
+                        && browser.compressZipMethod == .deflate64
+                        && browser.compressionLevel > 0
+                        && !ToolLocator.isSevenZipAvailable))
             }
         }
         .padding(24)
@@ -199,6 +229,15 @@ struct CompressSheet: View {
                 browser.mergeCompressSourcesFromDrop(items)
             }
         }
+    }
+
+    /// Shown when Deflate64 is selected. Store does not use the method.
+    private var deflate64Note: String {
+        var note = "64 KB window, written with 7-Zip. ArchivePeek and unzip can open it. macOS ditto cannot. Store still writes uncompressed files."
+        if browser.compressSaveAsComicBookZip {
+            note += " Many comic readers only open Deflate."
+        }
+        return note
     }
 
     /// The installer option is DMG-only and needs an .app. Follow the Settings default until the user changes the toggle.

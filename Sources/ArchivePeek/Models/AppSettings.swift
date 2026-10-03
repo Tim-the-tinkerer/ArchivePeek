@@ -8,6 +8,7 @@ enum AppSettings {
         static let solidArchive = "defaultSolidArchive"
         static let dmgAppInstaller = "defaultDmgAppInstaller"
         static let comicBookZip = "defaultComicBookZip"
+        static let zipMethod = "defaultZipMethod"
         static let finderContextMenu = "finderContextMenu"
         static let customExclusions = "customExclusionPatterns"
     }
@@ -64,6 +65,17 @@ enum AppSettings {
     static var defaultComicBookZip: Bool {
         get { store.bool(forKey: Keys.comicBookZip) }
         set { store.set(newValue, forKey: Keys.comicBookZip) }
+    }
+
+    static var defaultZipMethod: ZipCompressionMethod {
+        get {
+            guard let raw = store.string(forKey: Keys.zipMethod),
+                  let method = ZipCompressionMethod(rawValue: raw) else {
+                return .defaultMethod
+            }
+            return method
+        }
+        set { store.set(newValue.rawValue, forKey: Keys.zipMethod) }
     }
 
     static var finderContextMenuEnabled: Bool {
@@ -144,6 +156,7 @@ enum AppSettings {
         // (That used to block Create Archive with a misleading installer/.app error.)
         browser.compressDmgAppInstaller = defaultDmgAppInstaller && defaultCompressFormat.isDmg
         browser.compressSaveAsComicBookZip = defaultComicBookZip && defaultCompressFormat.isZip
+        browser.compressZipMethod = defaultZipMethod
         browser.compressSplitVolume = .off
     }
 }

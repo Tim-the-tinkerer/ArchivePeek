@@ -22,6 +22,7 @@ struct HelpView: View {
 
                     helpSection("Browsing", icon: "folder") {
                         helpBullet("Use the breadcrumb bar to jump between folders inside the archive.")
+                        helpBullet("The **Method** column shows how each file was compressed (Store, Deflate, Deflate64, LZMA2, and so on). Folders and tar members have no method of their own.")
                         helpBullet("Click to select files; Shift-click to select multiple items.")
                         helpBullet("Press Return to open the selected item, or **Space** to Quick Look.")
                         helpBullet("Right-click for Open, Quick Look, Extract, or Remove from Archive.")
@@ -69,7 +70,8 @@ struct HelpView: View {
                         helpBullet("Supported output formats include ZIP, DMG, 7z, RAR, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, GZIP, BZIP2, and XZ.")
                         helpBullet("**Split into volumes** (ZIP, 7z, RAR) writes `Name.7z.001` / `Name.zip.001` or `Name.part1.rar`. Keep every part in the same folder.")
                         helpBullet("**RAR** creation requires WinRAR’s `rar` command (`brew install --cask rar` or rarlab.com). Opening RAR still works with bundled 7-Zip.")
-                        helpBullet("Under **ZIP**, enable **Save as comic book ZIP** to write a standard ZIP with a `.cbz` extension for comic readers.")
+                        helpBullet("Under **ZIP**, **Deflate** is the usual method. **Deflate64** uses a 64 KB window and is written with 7-Zip. ArchivePeek and unzip can open it. macOS ditto cannot. Store still writes uncompressed files.")
+                        helpBullet("Under **ZIP**, enable **Save as comic book ZIP** to write a standard ZIP with a `.cbz` extension for comic readers. Many comic readers only open Deflate.")
                         helpBullet("**DMG** uses macOS hdiutil to create standard compressed or read-only disk images. DMG supports optional AES-256 encryption.")
                         helpBullet("When compressing a `.app` bundle to DMG, enable **App installer layout** to include an Applications folder shortcut for drag-to-install distribution.")
                         helpBullet("ZIP and **7z** prepare files first (with progress), then compress — reliable for large folders and developer projects on external volumes.")
@@ -94,7 +96,7 @@ struct HelpView: View {
 
                     helpSection("Settings", icon: "gearshape") {
                         helpBullet("Open **ArchivePeek → Settings…** (⌘,) to set default compression options.")
-                        helpBullet("Defaults include format, compression level, verify before replace, solid 7z, comic book ZIP (.cbz), and DMG app installer layout.")
+                        helpBullet("Defaults include format, compression level, ZIP method, verify before replace, solid 7z, comic book ZIP (.cbz), and DMG app installer layout.")
                         helpBullet("**Exclusions** is a list of names and patterns left out of new archives and of files you add. `node_modules` matches that name anywhere. `src/*.swift` matches that path. `*` and `?` are wildcards. The list starts empty.")
                         helpBullet("Defaults are applied each time you open the Compress sheet.")
                         helpBullet("Use **Set ArchivePeek as Default for Archives** to make ArchivePeek the default app for ZIP, 7z, TAR, RAR, and similar archives. DMG and ISO are excluded.")

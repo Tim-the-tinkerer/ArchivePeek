@@ -39,11 +39,14 @@ if [[ -x "$APP" ]]; then pass "ArchivePeek binary exists"; else fail "ArchivePee
 if [[ -x "$BUNDLED_7ZZ" ]]; then pass "Bundled 7zz exists"; else fail "Bundled 7zz missing"; fi
 if "$TOOLS" >/dev/null 2>&1; then pass "Materialized 7zz runs"; else fail "Materialized 7zz smoke test"; fi
 VER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' ArchivePeek.app/Contents/Info.plist)
-[[ "$VER" == "1.0.39" ]] && pass "Version is 1.0.39" || fail "Version expected 1.0.39, got $VER"
+[[ "$VER" == "1.0.41" ]] && pass "Version is 1.0.41" || fail "Version expected 1.0.41, got $VER"
 
 echo
 echo "2. Browse / list archives"
-if /usr/bin/zipinfo -1 "$TMP/Fun Stuff.zip" | grep -Fq "Fun Stuff/track one.mp3"; then
+# Capture first. A pipe into grep -q can make zipinfo exit on SIGPIPE, and pipefail
+# then reports failure even when the name is in the listing.
+ZIPLIST=$(/usr/bin/zipinfo -1 "$TMP/Fun Stuff.zip" || true)
+if grep -Fq "Fun Stuff/track one.mp3" <<<"$ZIPLIST"; then
   pass "Plain ZIP lists files with spaces"
 else
   fail "Plain ZIP listing"
@@ -107,6 +110,21 @@ OUT="$TMP/out"
 mkdir -p "$OUT"
 /usr/bin/zip -1 "$OUT/multi.zip" "$TMP/Fun Stuff/track one.mp3" "$TMP/Fun Stuff/track two.mp3" >/dev/null
 [[ -f "$OUT/multi.zip" ]] && pass "Native zip compression" || fail "Native zip compression"
+
+# A 10-byte file is stored. Deflate64 only shows up once the data is large enough to compress.
+python3 -c 'open("'"$TMP"'/deflate64-src.txt","w").write("hello deflate64 " * 400)'
+if "$TOOLS" a -tzip -mx5 -mm=Deflate64 -y "$OUT/deflate64.zip" "$TMP/deflate64-src.txt" >/dev/null; then
+  D64_LIST=$("$TOOLS" l -slt "$OUT/deflate64.zip" || true)
+  if grep -q 'Method = Deflate64' <<<"$D64_LIST" \
+    && /usr/bin/unzip -t "$OUT/deflate64.zip" >/dev/null \
+    && ! ditto -x -k "$OUT/deflate64.zip" "$OUT/deflate64-ditto" >/dev/null 2>&1; then
+    pass "ZIP Deflate64 is written by 7-Zip and rejected by ditto"
+  else
+    fail "ZIP Deflate64 method"
+  fi
+else
+  fail "ZIP Deflate64 method"
+fi
 
 /usr/bin/ditto -c -k --keepParent "$TMP/Fun Stuff" "$OUT/ditto.zip"
 [[ -f "$OUT/ditto.zip" ]] && pass "Ditto single-folder ZIP" || fail "Ditto ZIP"

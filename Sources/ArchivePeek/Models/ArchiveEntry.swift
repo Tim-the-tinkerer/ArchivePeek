@@ -6,6 +6,9 @@ struct ArchiveEntry: Identifiable, Hashable, Sendable {
     let uncompressedSize: Int64
     let compressedSize: Int64?
     let modified: Date?
+    /// Compression method reported by the archive, such as Store, Deflate, or LZMA2:24.
+    /// Nil when the listing has no per-file method. Folders usually have none worth showing.
+    let compressionMethod: String?
 
     var id: String { path }
 

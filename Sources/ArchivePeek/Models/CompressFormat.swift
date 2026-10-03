@@ -127,6 +127,30 @@ enum CompressFormat: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// ZIP member method. Deflate is the usual method. Deflate64 is ZIP method 9.
+enum ZipCompressionMethod: String, CaseIterable, Identifiable, Hashable, Sendable {
+    case deflate
+    case deflate64
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .deflate: return "Deflate"
+        case .deflate64: return "Deflate64"
+        }
+    }
+
+    static var defaultMethod: ZipCompressionMethod { .deflate }
+
+    /// 7-Zip switch for this method. Nil keeps 7-Zip’s ZIP default (Store at level 0, Deflate otherwise).
+    /// `-mm=Deflate64` together with `-mx0` still writes Deflate64, so Store must not include the switch.
+    func sevenZipArgument(compressionLevel: Int) -> String? {
+        guard self == .deflate64, compressionLevel > 0 else { return nil }
+        return "-mm=Deflate64"
+    }
+}
+
 enum SplitVolumePreset: String, CaseIterable, Identifiable, Hashable, Sendable {
     case off
     case mb1

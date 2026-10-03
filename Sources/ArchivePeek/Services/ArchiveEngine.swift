@@ -89,6 +89,7 @@ enum ArchiveEngine {
         to archive: URL,
         format: CompressFormat,
         compressionLevel: Int = 5,
+        zipMethod: ZipCompressionMethod = .deflate,
         password: String? = nil,
         solidArchive: Bool = false,
         volumeArgument: String? = nil,
@@ -105,6 +106,7 @@ enum ArchiveEngine {
                 to: archive,
                 format: format,
                 compressionLevel: compressionLevel,
+                zipMethod: zipMethod,
                 password: password,
                 solidArchive: solidArchive,
                 volumeArgument: volumeArgument,
@@ -122,6 +124,7 @@ enum ArchiveEngine {
         archive: URL,
         archiveFolder: String,
         compressionLevel: Int = 5,
+        zipMethod: ZipCompressionMethod = .deflate,
         password: String? = nil,
         accessTokens: [SecurityScopedAccess.Token] = [],
         handle: ProcessRunner.Handle? = nil,
@@ -145,6 +148,7 @@ enum ArchiveEngine {
                 to: archive,
                 archiveFolder: archiveFolder,
                 compressionLevel: compressionLevel,
+                zipMethod: zipMethod,
                 password: password,
                 handle: handle,
                 onProgress: onProgress
@@ -239,6 +243,7 @@ enum ArchiveEngine {
         to archive: URL,
         format: CompressFormat,
         compressionLevel: Int,
+        zipMethod: ZipCompressionMethod,
         password: String?,
         solidArchive: Bool,
         volumeArgument: String?,
@@ -299,13 +304,19 @@ enum ArchiveEngine {
         let noPassword = password == nil || password?.isEmpty == true
         let singleSourceIsSymlink = workSources.count == 1
             && ((try? workSources[0].resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true)
+        // ditto and /usr/bin/zip write Deflate or Store. Deflate64 is 7-Zip only.
+        // The switch is nil at Store, so level 0 stays on those tools.
+        let writesDeflate64 = format.isZip
+            && zipMethod.sevenZipArgument(compressionLevel: compressionLevel) != nil
         let useDitto = format == .zip
+            && !writesDeflate64
             && noPassword
             && !splitting
             && workSources.count == 1
             && !singleSourceIsSymlink
             && ToolLocator.dittoPath != nil
         let useNativeZip = format == .zip
+            && !writesDeflate64
             && noPassword
             && !splitting
             && ToolLocator.zipPath != nil
@@ -375,6 +386,7 @@ enum ArchiveEngine {
                 to: archive,
                 format: format,
                 compressionLevel: compressionLevel,
+                zipMethod: zipMethod,
                 password: password,
                 solidArchive: solidArchive,
                 volumeArgument: volumeArgument,

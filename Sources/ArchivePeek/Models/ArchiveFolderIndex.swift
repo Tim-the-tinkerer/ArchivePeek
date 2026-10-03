@@ -39,7 +39,8 @@ struct ArchiveFolderIndex: Sendable {
                                 isDirectory: true,
                                 uncompressedSize: entry.uncompressedSize,
                                 compressedSize: entry.compressedSize,
-                                modified: entry.modified
+                                modified: entry.modified,
+                                compressionMethod: nil
                             ),
                             in: folderPath,
                             key: "\(component)/"
@@ -52,7 +53,8 @@ struct ArchiveFolderIndex: Sendable {
                                 isDirectory: false,
                                 uncompressedSize: entry.uncompressedSize,
                                 compressedSize: entry.compressedSize,
-                                modified: entry.modified
+                                modified: entry.modified,
+                                compressionMethod: entry.compressionMethod
                             ),
                             in: folderPath,
                             key: component
@@ -66,7 +68,8 @@ struct ArchiveFolderIndex: Sendable {
                             isDirectory: true,
                             uncompressedSize: 0,
                             compressedSize: nil,
-                            modified: nil
+                            modified: nil,
+                            compressionMethod: nil
                         ),
                         in: folderPath,
                         key: "\(component)/"

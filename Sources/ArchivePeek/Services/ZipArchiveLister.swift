@@ -47,6 +47,7 @@ enum ZipArchiveLister {
             if (generalPurposeFlag & 0x0001) != 0 {
                 hasEncryptedEntries = true
             }
+            var compressionMethod = readUInt16(centralDirectory, at: offset + 10)
 
             var uncompressedSize = Int64(readUInt32(centralDirectory, at: offset + 24))
             var compressedSize = Int64(readUInt32(centralDirectory, at: offset + 20))
@@ -68,20 +69,24 @@ enum ZipArchiveLister {
                 throw ArchiveError.zipRequiresSevenZip
             }
 
+            let extraStart = nameEnd
+            let extraEnd = extraStart + extraFieldLength
+            let extra = extraEnd <= centralDirectory.count
+                ? centralDirectory[extraStart..<extraEnd]
+                : Data()
             if uncompressedSize == 0xFFFF_FFFF || compressedSize == 0xFFFF_FFFF {
-                let extraStart = nameEnd
-                let extraEnd = extraStart + extraFieldLength
-                if extraEnd <= centralDirectory.count {
-                    let extra = centralDirectory[extraStart..<extraEnd]
-                    if let zip64 = parseZip64Extra(extra) {
-                        if uncompressedSize == 0xFFFF_FFFF, let size = zip64.uncompressed {
-                            uncompressedSize = size
-                        }
-                        if compressedSize == 0xFFFF_FFFF, let size = zip64.compressed {
-                            compressedSize = size
-                        }
+                if let zip64 = parseZip64Extra(extra) {
+                    if uncompressedSize == 0xFFFF_FFFF, let size = zip64.uncompressed {
+                        uncompressedSize = size
+                    }
+                    if compressedSize == 0xFFFF_FFFF, let size = zip64.compressed {
+                        compressedSize = size
                     }
                 }
+            }
+            // Method 99 is WinZip AES. The real compression method is inside extra field 0x9901.
+            if compressionMethod == 99, let inner = aesCompressionMethod(in: extra) {
+                compressionMethod = inner
             }
 
             // DOS dir bit (0x10) and Unix mode in high 16 bits (S_IFDIR = 0040000).
@@ -95,7 +100,8 @@ enum ZipArchiveLister {
                     isDirectory: isDirectory,
                     uncompressedSize: isDirectory ? 0 : uncompressedSize,
                     compressedSize: isDirectory ? nil : compressedSize,
-                    modified: nil
+                    modified: nil,
+                    compressionMethod: isDirectory ? nil : methodName(for: compressionMethod)
                 )
             )
 
@@ -140,6 +146,48 @@ enum ZipArchiveLister {
         }
 
         throw ArchiveError.invalidArchive
+    }
+
+    /// Names match the words 7-Zip prints for the same ZIP method numbers.
+    static func methodName(for code: UInt16) -> String {
+        switch code {
+        case 0: return "Store"
+        case 1: return "Shrink"
+        case 2, 3, 4, 5: return "Reduce"
+        case 6, 10: return "Implode"
+        case 8: return "Deflate"
+        case 9: return "Deflate64"
+        case 12: return "BZip2"
+        case 14: return "LZMA"
+        case 18: return "TERSE"
+        case 19: return "LZ77"
+        case 93: return "Zstd"
+        case 94: return "MP3"
+        case 95: return "XZ"
+        case 96: return "JPEG"
+        case 97: return "WavPack"
+        case 98: return "PPMd"
+        case 99: return "AES"
+        default: return "Method \(code)"
+        }
+    }
+
+    /// WinZip AES extra field 0x9901 stores the compression method that was wrapped.
+    private static func aesCompressionMethod(in extra: Data) -> UInt16? {
+        var offset = 0
+        while offset + 4 <= extra.count {
+            let headerID = readUInt16(extra, at: offset)
+            let dataSize = Int(readUInt16(extra, at: offset + 2))
+            let dataStart = offset + 4
+            let dataEnd = dataStart + dataSize
+            guard dataEnd <= extra.count else { break }
+            // version(2) + "AE"(2) + strength(1) + method(2)
+            if headerID == 0x9901, dataSize >= 7 {
+                return readUInt16(extra, at: dataStart + 5)
+            }
+            offset = dataEnd
+        }
+        return nil
     }
 
     private static func parseZip64Extra(_ extra: Data) -> (uncompressed: Int64?, compressed: Int64?)? {

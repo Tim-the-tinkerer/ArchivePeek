@@ -9,6 +9,7 @@ package struct SettingsView: View {
     @AppStorage(AppSettings.Keys.solidArchive) private var solidArchive = false
     @AppStorage(AppSettings.Keys.dmgAppInstaller) private var dmgAppInstaller = false
     @AppStorage(AppSettings.Keys.comicBookZip) private var comicBookZip = false
+    @AppStorage(AppSettings.Keys.zipMethod) private var zipMethodRaw = ZipCompressionMethod.defaultMethod.rawValue
     @AppStorage(AppSettings.Keys.finderContextMenu) private var finderContextMenuEnabled = false
 
     @State private var exclusionPatterns: [String] = []
@@ -29,6 +30,13 @@ package struct SettingsView: View {
         Binding(
             get: { CompressFormat(rawValue: compressFormatRaw) ?? .defaultFormat },
             set: { compressFormatRaw = $0.rawValue }
+        )
+    }
+
+    private var zipMethod: Binding<ZipCompressionMethod> {
+        Binding(
+            get: { ZipCompressionMethod(rawValue: zipMethodRaw) ?? .defaultMethod },
+            set: { zipMethodRaw = $0.rawValue }
         )
     }
 
@@ -63,6 +71,11 @@ package struct SettingsView: View {
                 }
 
                 if compressFormat.wrappedValue.isZip {
+                    Picker("ZIP method", selection: zipMethod) {
+                        ForEach(ZipCompressionMethod.allCases) { method in
+                            Text(method.label).tag(method)
+                        }
+                    }
                     Toggle("Save ZIP as comic book (.cbz)", isOn: $comicBookZip)
                 }
 
@@ -72,7 +85,7 @@ package struct SettingsView: View {
             } header: {
                 Text("Compression")
             } footer: {
-                Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. Comic book ZIP saves a standard ZIP with a .cbz extension. DMG app installer layout is used when compressing .app bundles to DMG. Creating RAR archives requires WinRAR’s rar command; 7-Zip can still open RAR files.")
+                Text("These defaults apply whenever you open the Compress sheet. When verify is on, a new archive is integrity-tested before any existing file at the destination is replaced. Comic book ZIP saves a standard ZIP with a .cbz extension. ZIP method Deflate64 uses a 64 KB window and is written with 7-Zip. ArchivePeek and unzip can open it. macOS ditto cannot. Store still writes uncompressed files. DMG app installer layout is used when compressing .app bundles to DMG. Creating RAR archives requires WinRAR’s rar command; 7-Zip can still open RAR files.")
             }
 
             Section {

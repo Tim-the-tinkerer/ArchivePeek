@@ -2,6 +2,16 @@
 
 All notable changes to ArchivePeek are documented in this file.
 
+## [1.0.41] — 2026-10-02
+
+### Added
+- **Method column** — the file list shows each file’s compression method, such as Store, Deflate, Deflate64, or LZMA2.
+
+## [1.0.40] — 2026-10-01
+
+### Added
+- **ZIP method** — Create Archive and Settings can write ZIP with Deflate64 (a 64 KB window) as well as the usual Deflate. Store still writes uncompressed files. Deflate64 is written with 7-Zip. ArchivePeek and unzip can open it. macOS ditto cannot.
+
 ## [1.0.39] — 2026-10-01
 
 ### Fixed

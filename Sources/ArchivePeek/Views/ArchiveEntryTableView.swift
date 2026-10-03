@@ -50,6 +50,7 @@ struct ArchiveEntryTableView: NSViewRepresentable {
         addColumn("name", title: "Name", width: 280, minWidth: 180, to: tableView)
         addColumn("size", title: "Size", width: 80, minWidth: 64, to: tableView)
         addColumn("compressed", title: "Compressed", width: 90, minWidth: 72, to: tableView)
+        addColumn("method", title: "Method", width: 120, minWidth: 72, to: tableView)
         addColumn("modified", title: "Modified", width: 130, minWidth: 110, to: tableView)
         addColumn("path", title: "Path", width: 220, minWidth: 120, to: tableView)
 
@@ -155,6 +156,14 @@ struct ArchiveEntryTableView: NSViewRepresentable {
                     in: tableView,
                     identifier: "CompressedCell",
                     monospaced: true,
+                    secondary: true
+                )
+            case "method":
+                return textCell(
+                    EntryFormatting.methodLabel(for: entry),
+                    in: tableView,
+                    identifier: "MethodCell",
+                    monospaced: false,
                     secondary: true
                 )
             case "modified":
@@ -586,6 +595,11 @@ private enum EntryFormatting {
     static func compressedLabel(for entry: ArchiveEntry) -> String {
         guard !entry.isDirectory, let compressed = entry.compressedSize else { return "—" }
         return ByteCountFormatter.string(fromByteCount: compressed, countStyle: .file)
+    }
+
+    static func methodLabel(for entry: ArchiveEntry) -> String {
+        guard !entry.isDirectory, let method = entry.compressionMethod, !method.isEmpty else { return "—" }
+        return method
     }
 
     static func modifiedLabel(for entry: ArchiveEntry) -> String {

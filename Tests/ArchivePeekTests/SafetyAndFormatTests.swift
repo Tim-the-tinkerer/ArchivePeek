@@ -29,6 +29,13 @@ final class SafetyAndFormatTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: inside.path))
     }
 
+    func testDeflate64SwitchIsOnlyAddedWhenCompressionIsOn() {
+        XCTAssertNil(ZipCompressionMethod.deflate.sevenZipArgument(compressionLevel: 9))
+        XCTAssertNil(ZipCompressionMethod.deflate64.sevenZipArgument(compressionLevel: 0))
+        XCTAssertEqual(ZipCompressionMethod.deflate64.sevenZipArgument(compressionLevel: 1), "-mm=Deflate64")
+        XCTAssertEqual(ZipCompressionMethod.deflate64.sevenZipArgument(compressionLevel: 9), "-mm=Deflate64")
+    }
+
     func testExclusionsKeepNestedFilesThatASlashCrossingStarWouldDrop() {
         XCTAssertTrue(ArchiveExclusions.excludes("src/main.swift", patterns: ["src/*.swift"]))
         XCTAssertFalse(ArchiveExclusions.excludes("src/Util/main.swift", patterns: ["src/*.swift"]))

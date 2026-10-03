@@ -195,7 +195,8 @@ enum TarBackend {
                 isDirectory: false,
                 uncompressedSize: typeFlag == "l" || typeFlag == "p" ? 0 : size,
                 compressedSize: nil,
-                modified: modified
+                modified: modified,
+                compressionMethod: nil
             )
         }
 
@@ -209,7 +210,8 @@ enum TarBackend {
             isDirectory: isDir,
             uncompressedSize: isDir ? 0 : size,
             compressedSize: nil,
-            modified: modified
+            modified: modified,
+            compressionMethod: nil
         )
     }
 

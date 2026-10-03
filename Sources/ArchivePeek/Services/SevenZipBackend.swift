@@ -228,6 +228,7 @@ enum SevenZipBackend {
         to archive: URL,
         archiveFolder: String,
         compressionLevel: Int,
+        zipMethod: ZipCompressionMethod = .deflate,
         password: String?,
         handle: ProcessRunner.Handle? = nil,
         onProgress: (@Sendable (CompressionProgressUpdate) -> Void)? = nil
@@ -297,6 +298,9 @@ enum SevenZipBackend {
             "-sse",
             "-r",
         ]
+        if format == .zip, let methodSwitch = zipMethod.sevenZipArgument(compressionLevel: compressionLevel) {
+            arguments.append(methodSwitch)
+        }
         if format == .sevenZip, let password, !password.isEmpty {
             arguments.append("-mhe=on")
         }
@@ -498,6 +502,7 @@ enum SevenZipBackend {
         to archive: URL,
         format: CompressFormat,
         compressionLevel: Int,
+        zipMethod: ZipCompressionMethod = .deflate,
         password: String?,
         solidArchive: Bool = false,
         volumeArgument: String? = nil,
@@ -572,6 +577,9 @@ enum SevenZipBackend {
             "-snh",
             "-sse",
         ]
+        if format.isZip, let methodSwitch = zipMethod.sevenZipArgument(compressionLevel: compressionLevel) {
+            arguments.append(methodSwitch)
+        }
 
         if CompressionSupport.sourcesIncludeDirectory(workSources) {
             arguments.append("-r")
@@ -764,7 +772,7 @@ enum SevenZipBackend {
         URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
     }
 
-    private static func parseListing(_ text: String) -> (
+    static func parseListing(_ text: String) -> (
         entries: [ArchiveEntry],
         hasEncryptedEntry: Bool,
         encryptedSamplePath: String?
@@ -777,6 +785,7 @@ enum SevenZipBackend {
         var sawAttributes = false
         var sawEntryBody = false
         var currentModified: Date?
+        var currentMethod: String?
         var currentEncrypted = false
         var hasEncryptedEntry = false
         var encryptedSamplePath: String?
@@ -789,6 +798,7 @@ enum SevenZipBackend {
             sawAttributes = false
             sawEntryBody = false
             currentModified = nil
+            currentMethod = nil
             currentEncrypted = false
         }
 
@@ -815,7 +825,8 @@ enum SevenZipBackend {
                     isDirectory: currentIsDirectory,
                     uncompressedSize: currentSize,
                     compressedSize: currentPackedSize,
-                    modified: currentModified
+                    modified: currentModified,
+                    compressionMethod: currentIsDirectory ? nil : currentMethod
                 )
             )
             resetCurrent()
@@ -836,6 +847,13 @@ enum SevenZipBackend {
             }
             if line.hasPrefix("Packed Size = ") {
                 currentPackedSize = Int64(line.dropFirst("Packed Size = ".count))
+                sawEntryBody = true
+                continue
+            }
+            if line.hasPrefix("Method = ") {
+                let value = String(line.dropFirst("Method = ".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                currentMethod = value.isEmpty ? nil : value
                 sawEntryBody = true
                 continue
             }
